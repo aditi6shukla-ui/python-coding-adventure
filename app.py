@@ -4,7 +4,9 @@ import base64
 import random
 import json
 import os
-from datetime import datetime
+import sys
+import io
+from datetime import datetime, date
 
 # ============================================================
 # PAGE CONFIG
@@ -156,6 +158,37 @@ CUSTOM_CSS = """
 
   .pass-badge { color:#00FF41; font-family:'Space Mono',monospace; font-size:0.8rem; }
   .fail-badge { color:#FF4444; font-family:'Space Mono',monospace; font-size:0.8rem; }
+
+  .boss-box {
+    background: linear-gradient(135deg, rgba(255,68,68,0.15), rgba(255,100,0,0.1));
+    border: 2px solid #FF4444; border-radius: var(--radius); padding: 1.5rem;
+    box-shadow: 0 0 20px rgba(255,68,68,0.25), 4px 4px 0 #000; margin: 1rem 0;
+  }
+  .leaderboard-row {
+    display: flex; align-items: center; gap: 0.8rem;
+    padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border);
+    font-family: 'Space Mono', monospace; font-size: 0.76rem;
+  }
+  .leaderboard-row:last-child { border-bottom: none; }
+  .streak-badge {
+    display: inline-block; background: rgba(255,160,0,0.15);
+    border: 2px solid #FFA000; border-radius: 6px;
+    padding: 0.25rem 0.7rem; font-family: 'Space Mono', monospace;
+    font-size: 0.72rem; color: #FFA000; box-shadow: 2px 2px 0 #000;
+  }
+  .stTextArea textarea {
+    background: #111 !important; border: 2px solid var(--border) !important;
+    color: var(--text) !important; border-radius: var(--radius) !important;
+    font-family: 'Space Mono', monospace !important; font-size: 0.82rem !important;
+  }
+  .stTextArea textarea:focus { border-color: var(--neon) !important; box-shadow: 0 0 0 1px var(--neon) !important; }
+  .stTextArea label { color: var(--muted) !important; font-family: 'Space Mono', monospace !important; font-size: 0.78rem !important; }
+  .output-box {
+    background: #0A0A0A; border: 1px solid #2A2A2A; border-radius: var(--radius);
+    padding: 0.8rem 1rem; font-family: 'Space Mono', monospace; font-size: 0.78rem;
+    color: #00FF41; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow-y: auto;
+  }
+  .error-output { color: #FF6666; }
 </style>
 """
 
@@ -1493,6 +1526,57 @@ print("Safe 10/0 =", safe_divide(10, 0))
 }
 
 # ============================================================
+# BOSS BATTLES  — one per level, answered by typing exact text
+# ============================================================
+BOSS_BATTLES = {
+    1: {
+        "title": "The Type Titan",
+        "icon": "🧨",
+        "flavor": "The Type Titan morphs into any data form — name the Python method that converts a string to ALL UPPERCASE letters.",
+        "hint": "It's a built-in str method. Call it like: 'hello'.????()",
+        "answer": ".upper()",
+        "xp_reward": 60,
+        "success_msg": "CRITICAL HIT! The Type Titan crumbles — it can't handle your string mastery!",
+    },
+    2: {
+        "title": "The Infinite Looper",
+        "icon": "♾️",
+        "flavor": "The Infinite Looper spins forever unless you know the exact keyword that exits a `while True:` loop instantly.",
+        "hint": "A single Python keyword — the one that exits a loop immediately.",
+        "answer": "break",
+        "xp_reward": 70,
+        "success_msg": "LOOP SHATTERED! The Infinite Looper vanishes — your control flow is flawless!",
+    },
+    3: {
+        "title": "The List Lich",
+        "icon": "📜",
+        "flavor": "The List Lich guards a forbidden list. Type the list method that adds a single item to the END of a list.",
+        "hint": "The most common list mutation method. `my_list.????(item)`",
+        "answer": ".append()",
+        "xp_reward": 80,
+        "success_msg": "APPENDED TO VICTORY! The List Lich's collection is yours now!",
+    },
+    4: {
+        "title": "The Lambda Shadow",
+        "icon": "λ",
+        "flavor": "The Lambda Shadow hides in anonymous functions. Reveal the Python keyword used to define a named function.",
+        "hint": "It comes before the function name: `??? my_func():`",
+        "answer": "def",
+        "xp_reward": 90,
+        "success_msg": "FUNCTION MASTERED! The Lambda Shadow dissolves in the light of your knowledge!",
+    },
+    5: {
+        "title": "The Final Dragon",
+        "icon": "🔥",
+        "flavor": "The Final Dragon breathes exceptions! Type the keyword that manually raises an exception in Python.",
+        "hint": "`??? ValueError('msg')` — how do you throw an exception?",
+        "answer": "raise",
+        "xp_reward": 150,
+        "success_msg": "LEGENDARY! The Final Dragon is vanquished — you are a true Python Master!",
+    },
+}
+
+# ============================================================
 # XP / RANK SYSTEM
 # ============================================================
 XP_TIERS = [
@@ -1532,27 +1616,54 @@ def check_password(password: str, pw_hash: str) -> bool:
 # PERSISTENT PROGRESS  (JSON-backed)
 # ============================================================
 def empty_progress():
-    return {"xp": 0, "completed_levels": [], "quiz_state": {}, "cert_name": ""}
+    return {
+        "xp": 0, "completed_levels": [], "quiz_state": {}, "cert_name": "",
+        "last_login": None, "streak": 0, "boss_battles_done": [],
+    }
 
 def load_user_progress(username: str):
     db   = get_db()
     prog = db["progress"].get(username, empty_progress())
-    st.session_state.xp              = prog.get("xp", 0)
+    st.session_state.xp               = prog.get("xp", 0)
     st.session_state.completed_levels = set(prog.get("completed_levels", []))
-    # quiz_state keys stored as strings in JSON → convert back to int
     raw_qs = prog.get("quiz_state", {})
-    st.session_state.quiz_state = {int(k): v for k, v in raw_qs.items()}
-    st.session_state.cert_name   = prog.get("cert_name", "")
+    st.session_state.quiz_state       = {int(k): v for k, v in raw_qs.items()}
+    st.session_state.cert_name        = prog.get("cert_name", "")
+    st.session_state.streak           = prog.get("streak", 0)
+    st.session_state.last_login       = prog.get("last_login", None)
+    st.session_state.boss_battles_done = set(prog.get("boss_battles_done", []))
+
+    # ── Streak logic ──
+    today = date.today().isoformat()
+    last  = st.session_state.last_login
+    if last is None:
+        st.session_state.streak = 1
+    elif last == today:
+        pass  # already counted today
+    else:
+        try:
+            last_date = date.fromisoformat(last)
+            delta     = (date.today() - last_date).days
+            if delta == 1:
+                st.session_state.streak += 1
+            elif delta > 1:
+                st.session_state.streak = 1
+        except Exception:
+            st.session_state.streak = 1
+    st.session_state.last_login = today
 
 def save_user_progress(username: str):
     db = get_db()
     if "progress" not in db:
         db["progress"] = {}
     db["progress"][username] = {
-        "xp":               st.session_state.xp,
-        "completed_levels": list(st.session_state.completed_levels),
-        "quiz_state":       {str(k): v for k, v in st.session_state.quiz_state.items()},
-        "cert_name":        st.session_state.cert_name,
+        "xp":                st.session_state.xp,
+        "completed_levels":  list(st.session_state.completed_levels),
+        "quiz_state":        {str(k): v for k, v in st.session_state.quiz_state.items()},
+        "cert_name":         st.session_state.cert_name,
+        "last_login":        st.session_state.get("last_login", None),
+        "streak":            st.session_state.get("streak", 0),
+        "boss_battles_done": list(st.session_state.get("boss_battles_done", set())),
     }
     flush_db()
 
@@ -1566,6 +1677,7 @@ def init_state():
         "auth_tab": "login", "auth_error": "", "auth_success": "",
         "xp": 0, "completed_levels": set(), "quiz_state": {}, "cert_name": "",
         "current_level": 1, "show_badge": None, "view": "hub",
+        "streak": 0, "last_login": None, "boss_battles_done": set(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1768,9 +1880,58 @@ def render_sidebar():
         if st.button("🚪 Log Out", use_container_width=True):
             save_user_progress(st.session_state.username)
             for k in ["logged_in","username","xp","completed_levels","quiz_state",
-                      "cert_name","current_level","show_badge","view"]:
+                      "cert_name","current_level","show_badge","view",
+                      "streak","last_login","boss_battles_done"]:
                 st.session_state.pop(k, None)
             st.rerun()
+
+        # ── Streak display ──
+        streak = st.session_state.get("streak", 0)
+        if streak >= 2:
+            st.markdown(
+                f'<div class="streak-badge" style="display:block;text-align:center;margin-top:0.6rem;">'
+                f'🔥 {streak}-Day Streak! &nbsp;·&nbsp; 1.2× XP Bonus</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Practice Lab ──
+        st.markdown("---")
+        st.markdown('<p style="font-family:Space Mono,monospace;font-size:0.7rem;color:#666;margin-bottom:0.4rem;">⚗️ PRACTICE LAB</p>', unsafe_allow_html=True)
+        code_input = st.text_area(
+            "Write Python code:",
+            height=140,
+            placeholder="print('Hello, Adventurer!')",
+            key="sandbox_code",
+            label_visibility="collapsed",
+        )
+        if st.button("▶ Run Code", use_container_width=True, key="run_sandbox"):
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+            try:
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                sys.stdout = stdout_capture
+                sys.stderr = stderr_capture
+                exec(compile(code_input, "<sandbox>", "exec"), {})  # isolated namespace
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                output = stdout_capture.getvalue()
+                err    = stderr_capture.getvalue()
+                if output or err:
+                    err_html = f'<span class="error-output">{err}</span>' if err else ""
+                    st.markdown(
+                        f'<div class="output-box">{output}{err_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown('<div class="output-box" style="color:#555;">(no output)</div>', unsafe_allow_html=True)
+            except Exception as e:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                st.markdown(
+                    f'<div class="output-box"><span class="error-output">{type(e).__name__}: {e}</span></div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ============================================================
@@ -1806,6 +1967,134 @@ def get_exam_questions(level_id: int) -> list[dict]:
         save_user_progress(st.session_state.username)
 
     return [bank[i] for i in indices], indices
+
+
+# ============================================================
+# LEADERBOARD
+# ============================================================
+def render_leaderboard():
+    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+    st.markdown(
+        '<h2 style="font-family:Space Mono,monospace;font-size:1rem;color:#FFA000;margin-bottom:0.2rem;">🏆 Global Rankings</h2>'
+        '<p style="font-size:0.75rem;color:#666;font-family:Space Mono,monospace;margin-bottom:0.8rem;">Top 10 adventurers ranked by total XP</p>',
+        unsafe_allow_html=True,
+    )
+    db    = get_db()
+    prog  = db.get("progress", {})
+    users = db.get("users", {})
+
+    ranked = sorted(
+        [
+            {
+                "username": uname,
+                "xp":       data.get("xp", 0),
+                "levels":   len(data.get("completed_levels", [])),
+                "streak":   data.get("streak", 0),
+            }
+            for uname, data in prog.items()
+            if uname in users
+        ],
+        key=lambda r: r["xp"],
+        reverse=True,
+    )[:10]
+
+    medal = {1: "🥇", 2: "🥈", 3: "🥉"}
+    rows_html = ""
+    for rank, row in enumerate(ranked, 1):
+        is_me  = row["username"] == st.session_state.username
+        title, icon = get_character_info(row["xp"])
+        bg     = "rgba(98,0,238,0.12)" if is_me else "transparent"
+        border = "1px solid #6200EE" if is_me else "none"
+        streak_html = f'<span style="color:#FFA000;font-size:0.7rem;">🔥{row["streak"]}</span>' if row["streak"] >= 2 else ""
+        rows_html += (
+            f'<div class="leaderboard-row" style="background:{bg};border:{border};border-radius:4px;">'
+            f'<span style="min-width:28px;color:#888;">{medal.get(rank, f"#{rank}")}</span>'
+            f'<span style="min-width:20px;">{icon}</span>'
+            f'<span style="flex:1;color:{"#00FF41" if is_me else "#E8E8E8"};">'
+            f'{"<strong>" if is_me else ""}{row["username"]}{"</strong>" if is_me else ""}'
+            f'{"&nbsp;(you)" if is_me else ""}</span>'
+            f'{streak_html}'
+            f'<span style="color:#9D46FF;min-width:60px;text-align:right;">{row["xp"]} XP</span>'
+            f'<span style="color:#555;min-width:50px;text-align:right;">{row["levels"]}/5 lvl</span>'
+            f'</div>'
+        )
+
+    if not ranked:
+        rows_html = '<div style="color:#555;font-family:Space Mono,monospace;font-size:0.78rem;padding:1rem;">No adventurers yet. Be the first!</div>'
+
+    st.markdown(
+        f'<div class="card" style="padding:0.5rem;">{rows_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# BOSS BATTLE
+# ============================================================
+def render_boss_battle(level_id: int):
+    boss    = BOSS_BATTLES[level_id]
+    beaten  = level_id in st.session_state.get("boss_battles_done", set())
+    streak  = st.session_state.get("streak", 0)
+    bonus   = streak >= 2
+
+    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+    if beaten:
+        st.markdown(
+            f'<div class="success-box" style="text-align:center;">'
+            f'<div style="font-size:1.5rem;margin-bottom:0.3rem;">{boss["icon"]}</div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:0.85rem;">⚔️ {boss["title"]} DEFEATED</div>'
+            f'<div style="font-size:0.75rem;margin-top:0.3rem;color:#888;">You already claimed the boss XP reward.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    xp_reward = int(boss["xp_reward"] * 1.2) if bonus else boss["xp_reward"]
+    bonus_html = f'<span style="color:#FFA000;"> (+20% streak bonus!)</span>' if bonus else ""
+
+    st.markdown(
+        f'<div class="boss-box">'
+        f'<div style="font-family:Space Mono,monospace;font-size:0.6rem;color:#FF6666;letter-spacing:0.3em;">⚔️ BOSS BATTLE</div>'
+        f'<div style="font-family:Space Mono,monospace;font-size:1.1rem;color:#fff;font-weight:700;margin:0.4rem 0;">'
+        f'{boss["icon"]} {boss["title"]}</div>'
+        f'<div style="color:#E8E8E8;font-size:0.85rem;margin-bottom:0.8rem;">{boss["flavor"]}</div>'
+        f'<div class="info-box" style="font-size:0.8rem;">💡 Hint: {boss["hint"]}</div>'
+        f'<div style="margin-top:0.6rem;font-family:Space Mono,monospace;font-size:0.72rem;color:#9D46FF;">'
+        f'Reward: <strong style="color:#00FF41">+{xp_reward} XP</strong>{bonus_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    attempt = st.text_input(
+        "Type your answer to defeat the boss:",
+        placeholder="e.g.  .append()",
+        key=f"boss_input_{level_id}",
+    )
+    if st.button(f"⚔️ Strike!", key=f"boss_submit_{level_id}"):
+        if attempt.strip() == boss["answer"]:
+            st.session_state.xp += xp_reward
+            if "boss_battles_done" not in st.session_state:
+                st.session_state.boss_battles_done = set()
+            st.session_state.boss_battles_done.add(level_id)
+            save_user_progress(st.session_state.username)
+            st.balloons()
+            st.markdown(
+                f'<div class="milestone">'
+                f'<div style="font-size:2.5rem;">{boss["icon"]}</div>'
+                f'<div style="font-family:Space Mono,monospace;color:#FF4444;font-size:0.9rem;margin:0.5rem 0;">BOSS DEFEATED!</div>'
+                f'<div style="color:#fff;font-size:0.82rem;">{boss["success_msg"]}</div>'
+                f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{xp_reward} XP earned 💾</span></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.rerun()
+        else:
+            st.markdown(
+                '<div style="background:rgba(255,68,68,0.1);border-left:4px solid #FF4444;'
+                'border-radius:0 8px 8px 0;padding:0.7rem 1rem;color:#FF8888;font-family:Space Mono,monospace;font-size:0.8rem;">'
+                '💥 The boss deflects your attack! Check your spelling and try again.</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ============================================================
@@ -1879,6 +2168,8 @@ def render_hub():
                 unsafe_allow_html=True,
             )
 
+    render_leaderboard()
+
 
 # ============================================================
 # LEVEL VIEW
@@ -1906,7 +2197,14 @@ def render_level(level_id):
         st.markdown(f'<div class="locked-box">🔒 Complete Level {level_id-1} first.</div>', unsafe_allow_html=True)
         return
 
-    tab1, tab2, tab3 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)"])
+    quiz_passed = level_id in st.session_state.completed_levels
+    boss        = BOSS_BATTLES.get(level_id)
+    boss_beaten = level_id in st.session_state.get("boss_battles_done", set())
+
+    # Boss tab label shows status
+    boss_label = "⚔️ Boss Battle ✅" if boss_beaten else ("⚔️ Boss Battle 🔓" if quiz_passed else "⚔️ Boss Battle 🔒")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)", boss_label])
     with tab1:
         st.markdown(lvl["description"], unsafe_allow_html=False)
         st.markdown(f'<div class="info-box">💡 Complete the quiz to earn <strong style="color:#00FF41">+{lvl["xp_reward"]} XP</strong> — Pass mark: <strong>6/10 (60%)</strong></div>', unsafe_allow_html=True)
@@ -1915,6 +2213,14 @@ def render_level(level_id):
         st.code(lvl["code_example"], language="python")
     with tab3:
         render_quiz(level_id, lvl)
+    with tab4:
+        if not quiz_passed:
+            st.markdown(
+                '<div class="locked-box">🔒 Pass the quiz first to unlock the Boss Battle and earn bonus XP!</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            render_boss_battle(level_id)
 
 
 # ============================================================
@@ -1930,12 +2236,15 @@ def render_quiz(level_id, lvl):
     # ── Milestone badge ──
     if st.session_state.show_badge == level_id:
         st.balloons()
+        xp_earned   = qs_data.get("xp_earned", lvl["xp_reward"])
+        streak       = st.session_state.get("streak", 0)
+        bonus_html   = ' <span style="color:#FFA000;font-size:0.75rem;">(🔥 streak bonus!)</span>' if streak >= 2 else ""
         st.markdown(
             f'<div class="milestone">'
             f'<div style="font-size:3rem;">🏆</div>'
             f'<div style="font-family:Space Mono,monospace;color:#00FF41;font-size:1rem;margin:0.5rem 0;">MILESTONE UNLOCKED!</div>'
             f'<div style="color:#fff;">{lvl["subtitle"]} Complete — Score: {score}/{QUESTIONS_PER_EXAM}</div>'
-            f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{lvl["xp_reward"]} XP saved 💾</span></div>'
+            f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{xp_earned} XP saved 💾</span>{bonus_html}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -2020,9 +2329,13 @@ def render_quiz(level_id, lvl):
             st.session_state.quiz_state[level_id] = current
 
             if new_passed and level_id not in st.session_state.completed_levels:
-                st.session_state.xp += lvl["xp_reward"]
+                streak     = st.session_state.get("streak", 0)
+                xp_earned  = int(lvl["xp_reward"] * 1.2) if streak >= 2 else lvl["xp_reward"]
+                st.session_state.xp += xp_earned
                 st.session_state.completed_levels.add(level_id)
                 st.session_state.show_badge = level_id
+                # Store actual XP awarded so badge can display it
+                current["xp_earned"] = xp_earned
 
             save_user_progress(st.session_state.username)
             st.rerun()
@@ -2123,3 +2436,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
