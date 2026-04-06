@@ -28,9 +28,22 @@ st.set_page_config(
 def get_firestore_client():
     """Initialise Firebase Admin SDK once and return Firestore client."""
     if not firebase_admin._apps:
-        key_dict = dict(st.secrets["firebase"])
-        # secrets.toml stores private_key with literal \n — restore real newlines
-        key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        # Build a clean dict from secrets — avoid mutating AttrDict
+        s = st.secrets["firebase"]
+        key_dict = {
+            "type":                        s["type"],
+            "project_id":                  s["project_id"],
+            "private_key_id":              s["private_key_id"],
+            # TOML may keep \n as literal two-char sequence — force real newlines
+            "private_key":                 s["private_key"].replace("\\n", "\n"),
+            "client_email":                s["client_email"],
+            "client_id":                   s["client_id"],
+            "auth_uri":                    s["auth_uri"],
+            "token_uri":                   s["token_uri"],
+            "auth_provider_x509_cert_url": s.get("auth_provider_x509_cert_url",
+                                                  "https://www.googleapis.com/oauth2/v1/certs"),
+            "client_x509_cert_url":        s.get("client_x509_cert_url", ""),
+        }
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     return firestore.client()
