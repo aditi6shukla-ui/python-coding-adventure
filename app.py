@@ -3,11 +3,10 @@ import hashlib
 import base64
 import random
 import json
-import os
 import sys
 import io
-import traceback
 from datetime import datetime, date
+from streamlit_firestore import FirestoreConnection   # pip install streamlit-firestore
 
 # ============================================================
 # PAGE CONFIG
@@ -20,31 +19,40 @@ st.set_page_config(
 )
 
 # ============================================================
-# PERSISTENT STORAGE  (JSON file — survives server restarts)
+# FIRESTORE CONNECTION
 # ============================================================
-USERS_FILE = "python_adventure_users.json"
+# Credentials live in .streamlit/secrets.toml  (see bottom of file)
+@st.cache_resource
+def get_firestore():
+    return st.connection("firestore", type=FirestoreConnection)
 
-def _load_raw() -> dict:
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"users": {}, "progress": {}}
+def _users_col():
+    return get_firestore().collection("users")
 
-def _save_raw(data: dict):
-    with open(USERS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def _progress_col():
+    return get_firestore().collection("progress")
 
-if "_DB_CACHE" not in st.__dict__:
-    st._DB_CACHE = _load_raw()
 
-def get_db() -> dict:
-    return st._DB_CACHE
+# ── Thin helpers so the rest of the app barely changes ────────
+def get_user_doc(username: str):
+    """Return dict for a user or None."""
+    doc = _users_col().document(username).get()
+    return doc.to_dict() if doc.exists else None
 
-def flush_db():
-    _save_raw(st._DB_CACHE)
+def get_progress_doc(username: str):
+    """Return progress dict for a user or None."""
+    doc = _progress_col().document(username).get()
+    return doc.to_dict() if doc.exists else None
+
+def set_user_doc(username: str, data: dict):
+    _users_col().document(username).set(data)
+
+def set_progress_doc(username: str, data: dict):
+    _progress_col().document(username).set(data)
+
+def get_all_progress() -> list[dict]:
+    """Return list of all progress dicts (for leaderboard)."""
+    return [doc.to_dict() for doc in _progress_col().stream()]
 
 
 # ============================================================
@@ -71,12 +79,30 @@ CUSTOM_CSS = """
   }
 
   .stApp { background: var(--bg) !important; font-family: 'DM Sans', sans-serif; color: var(--text); }
-  .block-container { padding: 1.5rem 2rem !important; max-width: 1100px; }
+  .block-container { padding: 1.5rem 2rem !important; max-width: 100% !important; }
   #MainMenu, footer, header { visibility: hidden; }
   .stDeployButton { display: none; }
 
-  [data-testid="stSidebar"] { background: #0A0A0A !important; border-right: 2px solid var(--border); }
-  [data-testid="stSidebar"] .block-container { padding: 1rem !important; }
+  /* Force sidebar always visible */
+  [data-testid="stSidebar"] {
+    background: #0A0A0A !important;
+    border-right: 2px solid var(--border);
+    display: flex !important;
+    visibility: visible !important;
+    min-width: 240px !important;
+    max-width: 280px !important;
+  }
+  [data-testid="stSidebar"] > div:first-child { width: 100% !important; }
+  [data-testid="stSidebar"] .block-container { padding: 1rem !important; max-width: 100% !important; }
+  /* Sidebar collapse button — keep it accessible */
+  [data-testid="collapsedControl"] { display: flex !important; visibility: visible !important; }
+  /* Newer Streamlit sidebar wrapper */
+  section[data-testid="stSidebar"] { display: flex !important; }
+  /* Prevent sidebar from collapsing due to translate transform */
+  section[data-testid="stSidebar"][aria-expanded="false"] {
+    transform: none !important;
+    margin-left: 0 !important;
+  }
 
   h1, h2, h3 { font-family: 'Space Mono', monospace !important; }
   .pixel-font { font-family: 'Press Start 2P', monospace !important; }
@@ -159,69 +185,155 @@ CUSTOM_CSS = """
   .pass-badge { color:#00FF41; font-family:'Space Mono',monospace; font-size:0.8rem; }
   .fail-badge { color:#FF4444; font-family:'Space Mono',monospace; font-size:0.8rem; }
 
-  /* ── Streak ── */
+  /* ── Practice Lab Panel ── */
+  .lab-header {
+    background: linear-gradient(135deg, #0D1F17, #131a15);
+    border: 1.5px solid #2A4A38;
+    border-bottom: none;
+    border-radius: 12px 12px 0 0;
+    padding: 0.7rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0;
+  }
+  .lab-header-dot {
+    width: 11px; height: 11px; border-radius: 50%;
+    display: inline-block; flex-shrink: 0;
+  }
+  .lab-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: #00FF41;
+    letter-spacing: 0.18em;
+    text-shadow: 0 0 8px rgba(0,255,65,0.4);
+    margin-left: 0.3rem;
+  }
+  .lab-filename {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.62rem;
+    color: #4A7A5A;
+    margin-left: auto;
+  }
+  /* Wrap the textarea in a styled box */
+  div[data-testid="stVerticalBlock"]:has(> div[data-testid="stTextArea"][data-key="sandbox_code"]) {
+    background: #0A120D;
+    border: 1.5px solid #2A4A38;
+    border-top: none;
+    border-bottom: none;
+    padding: 0.6rem 0.6rem 0.2rem;
+  }
+  /* Textarea itself */
+  textarea[data-testid="stTextArea"],
+  div[data-key="sandbox_code"] textarea {
+    background: #0A120D !important;
+    color: #C8FFC8 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 0.83rem !important;
+    line-height: 1.65 !important;
+    border: 1.5px solid #2A4A38 !important;
+    border-radius: 6px !important;
+    caret-color: #00FF41 !important;
+    resize: vertical !important;
+  }
+  div[data-key="sandbox_code"] textarea:focus {
+    border-color: #00FF41 !important;
+    box-shadow: 0 0 0 2px rgba(0,255,65,0.12) !important;
+  }
+  /* Run Code button — target by data-testid key */
+  div[data-testid="stButton"]:has(button[kind="secondary"]) > button,
+  .run-btn-wrap .stButton > button {
+    background: linear-gradient(135deg, #00C936, #00FF41) !important;
+    color: #000 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-weight: 700 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.08em !important;
+    border: 2px solid #000 !important;
+    border-radius: 0 !important;
+    box-shadow: 0 4px 20px rgba(0,255,65,0.3) !important;
+    padding: 0.7rem !important;
+    transition: all 0.1s ease !important;
+  }
+  .lab-console {
+    background: #070F0A;
+    border: 1.5px solid #2A4A38;
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+    padding: 0.75rem 1rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.8rem;
+    color: #00FF41;
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-height: 100px;
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.55;
+  }
+  .lab-console-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.62rem;
+    color: #3A6A4A;
+    letter-spacing: 0.2em;
+    padding: 0.35rem 1rem 0.1rem;
+    background: #070F0A;
+    border-left: 1.5px solid #2A4A38;
+    border-right: 1.5px solid #2A4A38;
+  }
+  .lab-console-idle { color: #2A5A3A; font-style: italic; }
+  .lab-console-error { color: #FF7070; }
+
+  /* Fix general text visibility — darken backgrounds less aggressively */
+  .stMarkdown p, .stMarkdown li, .stMarkdown td, .stMarkdown th {
+    color: #D8D8D8 !important;
+  }
+  .stMarkdown code { color: #A8FFB8 !important; background: #1A2A1E !important; }
+  .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 { color: #FFFFFF !important; }
+  .stMarkdown blockquote { border-left-color: #00FF41 !important; }
+  /* Tab text */
+  .stTabs [data-baseweb="tab"] { color: #BBBBBB !important; }
+  .stTabs [aria-selected="true"] { color: #FFFFFF !important; }
+  /* Sidebar text */
+  [data-testid="stSidebar"] p,
+  [data-testid="stSidebar"] span,
+  [data-testid="stSidebar"] label { color: #CCCCCC !important; }
+
+  .boss-box {
+    background: linear-gradient(135deg, rgba(255,68,68,0.15), rgba(255,100,0,0.1));
+    border: 2px solid #FF4444; border-radius: var(--radius); padding: 1.5rem;
+    box-shadow: 0 0 20px rgba(255,68,68,0.25), 4px 4px 0 #000; margin: 1rem 0;
+  }
+  .leaderboard-row {
+    display: flex; align-items: center; gap: 0.8rem;
+    padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border);
+    font-family: 'Space Mono', monospace; font-size: 0.76rem;
+  }
+  .leaderboard-row:last-child { border-bottom: none; }
   .streak-badge {
-    display:inline-flex; align-items:center; gap:0.4rem;
-    background:linear-gradient(135deg,#FF6400,#FF9000);
-    color:#000; font-family:'Space Mono',monospace; font-size:0.72rem; font-weight:700;
-    padding:0.35rem 0.9rem; border:2px solid #000; border-radius:4px;
-    box-shadow:2px 2px 0 #000; margin:0.4rem 0; width:100%; justify-content:center;
+    display: inline-block; background: rgba(255,160,0,0.15);
+    border: 2px solid #FFA000; border-radius: 6px;
+    padding: 0.25rem 0.7rem; font-family: 'Space Mono', monospace;
+    font-size: 0.72rem; color: #FFA000; box-shadow: 2px 2px 0 #000;
   }
-
-  /* ── Boss Battle ── */
-  .boss-card {
-    background:linear-gradient(135deg,#1a0505,#300000);
-    border:3px solid #FF4444; border-radius:12px; padding:1.6rem;
-    box-shadow:0 0 30px rgba(255,68,68,0.3),6px 6px 0 #000; margin:1rem 0;
+  .stTextArea textarea {
+    background: #111 !important; border: 2px solid var(--border) !important;
+    color: var(--text) !important; border-radius: var(--radius) !important;
+    font-family: 'Space Mono', monospace !important; font-size: 0.82rem !important;
   }
-  .boss-title { font-family:'Space Mono',monospace; font-size:1.1rem; color:#FF4444;
-    text-shadow:0 0 12px rgba(255,68,68,0.6); margin-bottom:0.6rem; font-weight:700; }
-  .boss-beaten {
-    background:rgba(0,255,65,0.07); border:2px solid #00FF41; border-radius:8px;
-    padding:1.2rem; text-align:center; font-family:'Space Mono',monospace; color:#00FF41;
-    font-size:0.9rem; margin-top:1rem;
+  .stTextArea textarea:focus { border-color: var(--neon) !important; box-shadow: 0 0 0 1px var(--neon) !important; }
+  .stTextArea label { color: var(--muted) !important; font-family: 'Space Mono', monospace !important; font-size: 0.78rem !important; }
+  .output-box {
+    background: #0A0A0A; border: 1px solid #2A2A2A; border-radius: var(--radius);
+    padding: 0.8rem 1rem; font-family: 'Space Mono', monospace; font-size: 0.78rem;
+    color: #00FF41; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow-y: auto;
   }
-
-  /* ── Leaderboard ── */
-  .lb-row {
-    display:flex; align-items:center; gap:1rem; padding:0.75rem 1rem;
-    background:var(--card2); border:1px solid var(--border); border-radius:8px;
-    margin-bottom:0.4rem; font-family:'Space Mono',monospace; transition:border-color 0.2s;
-  }
-  .lb-row:hover { border-color:#444; }
-  .lb-rank  { font-size:1.4rem; min-width:2.5rem; text-align:center; }
-  .lb-name  { color:var(--text); font-size:0.82rem; flex:1; }
-  .lb-xp    { color:var(--neon); font-size:0.82rem; font-weight:700; min-width:5rem; text-align:right; }
-  .lb-you   { color:#FFD700; }
-
-  /* ── Practice Lab / Sandbox ── */
-  .stTextArea > div > div > textarea {
-    background:#080808 !important; border:2px solid #2A2A2A !important;
-    color:#00FF41 !important; border-radius:var(--radius) !important;
-    font-family:'Space Mono',monospace !important; font-size:0.82rem !important;
-    line-height:1.5 !important;
-  }
-  .stTextArea > div > div > textarea:focus { border-color:var(--neon) !important; }
-  .sandbox-output {
-    background:#080808; border:2px solid #2A2A2A; border-radius:8px;
-    padding:0.8rem 1rem; font-family:'Space Mono',monospace; font-size:0.8rem;
-    color:#00FF41; white-space:pre-wrap; min-height:3rem; max-height:14rem;
-    overflow-y:auto; margin-top:0.4rem;
-  }
-  .sandbox-error {
-    background:rgba(255,68,68,0.06); border:2px solid #FF4444; border-radius:8px;
-    padding:0.8rem 1rem; font-family:'Space Mono',monospace; font-size:0.78rem;
-    color:#FF8888; white-space:pre-wrap; margin-top:0.4rem;
-  }
-  .sandbox-label {
-    font-family:'Space Mono',monospace; font-size:0.68rem; color:#555;
-    margin-top:0.3rem; margin-bottom:0.1rem;
-  }
+  .error-output { color: #FF6666; }
 </style>
 """
 
 # ============================================================
-# CURRICULUM DATA  — 5 levels, 20 questions + boss battle each
+# CURRICULUM DATA  — 5 levels, 20 questions each
 # ============================================================
 LEVELS = {
     1: {
@@ -279,14 +391,14 @@ bool("hi")     # → True    (non-empty = True)
 ### ✏️ String Operations
 ```python
 name = "python"
-name.upper()          # "PYTHON"
-name.capitalize()     # "Python"
-name.replace("p","P") # "Python"
-name.split("t")       # ["py", "hon"]
-len(name)             # 6
-name[0]               # "p"  (indexing)
-name[-1]              # "n"  (negative index)
-name[0:3]             # "pyt" (slicing)
+name.upper()         # "PYTHON"
+name.capitalize()    # "Python"
+name.replace("p","P")# "Python"
+name.split("t")      # ["py", "hon"]
+len(name)            # 6
+name[0]              # "p"  (indexing)
+name[-1]             # "n"  (negative index)
+name[0:3]            # "pyt" (slicing)
 
 # f-strings (best way to embed variables)
 score = 95
@@ -298,12 +410,12 @@ msg2 = f"Double: {score * 2}"
 
 ### ➗ Arithmetic Operators
 ```python
-10 + 3   # 13   (addition)
-10 - 3   # 7    (subtraction)
-10 * 3   # 30   (multiplication)
+10 + 3   # 13  (addition)
+10 - 3   # 7   (subtraction)
+10 * 3   # 30  (multiplication)
 10 / 3   # 3.333... (float division)
-10 // 3  # 3    (floor/integer division)
-10 % 3   # 1    (modulo — remainder)
+10 // 3  # 3   (floor/integer division)
+10 % 3   # 1   (modulo — remainder)
 2 ** 10  # 1024 (exponentiation)
 ```
 
@@ -313,14 +425,21 @@ msg2 = f"Double: {score * 2}"
 ```python
 type(42)        # <class 'int'>
 type("hello")   # <class 'str'>
+type(3.14)      # <class 'float'>
+type(True)      # <class 'bool'>
+type(None)      # <class 'NoneType'>
+
 isinstance(42, int)    # True
 isinstance("hi", str)  # True
 ```
+
+---
 
 > 💡 **Pro Tip:** Use `SCREAMING_SNAKE_CASE` for constants: `MAX_HEALTH = 100`
         """,
         "code_example": '''# 🐍 Variables & Data Types — Full Demo
 
+# Basic assignment
 name = "Alex"
 level = 1
 xp_multiplier = 1.5
@@ -331,18 +450,22 @@ print(f"Player: {name}")
 print(f"Level:  {level}")
 print(f"XP Mult:{xp_multiplier}")
 print(f"Hero?   {is_hero}")
+print(f"Lives:  {lives}")
 
+# Type inspection
 print(f"\\nType checks:")
-print(f"  type(level):          {type(level)}")
-print(f"  type(xp_multiplier):  {type(xp_multiplier)}")
-print(f"  isinstance(name,str): {isinstance(name, str)}")
+print(f"  type(level):         {type(level)}")
+print(f"  type(xp_multiplier): {type(xp_multiplier)}")
+print(f"  isinstance(name,str):{isinstance(name, str)}")
 
+# Type conversion
 score_str = "250"
 score_int = int(score_str)
 print(f"\\nConverted score: {score_int}")
 print(f"Doubled:         {score_int * 2}")
 print(f"As float:        {float(score_str)}")
 
+# String operations
 tag = "python_master"
 print(f"\\nString ops:")
 print(f"  Upper:   {tag.upper()}")
@@ -350,13 +473,15 @@ print(f"  Length:  {len(tag)}")
 print(f"  Slice:   {tag[0:6]}")
 print(f"  Replace: {tag.replace('_',' ').title()}")
 
+# Arithmetic
 print(f"\\nArithmetic:")
-print(f"  7 // 2 = {7 // 2}  (floor div)")
-print(f"  7 %  2 = {7 %  2}  (remainder)")
-print(f"  2**8   = {2**8} (power)")
+print(f"  7 // 2 = {7 // 2}   (floor div)")
+print(f"  7 %  2 = {7 %  2}   (remainder)")
+print(f"  2**8   = {2**8}   (power)")
 
+# Multiple assignment
 x, y, z = 10, 20, 30
-x, y = y, x
+x, y = y, x          # swap!
 print(f"\\nAfter swap: x={x}, y={y}")
 ''',
         "questions": [
@@ -401,15 +526,6 @@ print(f"\\nAfter swap: x={x}, y={y}")
             {"q": "What is `isinstance(42, int)`?",
              "options": ["True", "False", "42", "Error"], "answer": "True"},
         ],
-        "boss": {
-            "name": "The Type Phantom 👻",
-            "xp_reward": 50,
-            "lore": "A shapeless entity that constantly shifts between data types. It can only be revealed by someone who knows Python's type-inspection function.",
-            "challenge": "The Type Phantom is shapeshifting! 🧱 Type the Python built-in function (with a placeholder argument like `x`) used to check the data type of any variable.",
-            "hint": "You use it like this: `___(my_variable)` — it returns `<class 'int'>` for integers.",
-            "accepted": ["type(x)", "type(n)", "type(v)", "type(val)", "type(variable)", "type(a)", "type()"],
-            "display_answer": "type(x)",
-        },
     },
     2: {
         "title": "Logic & Loops", "subtitle": "The Path",
@@ -437,14 +553,17 @@ Control flow lets your program **make decisions** and **repeat actions**. These 
 
 ### 🔗 Logical Operators
 ```python
-True and True   # True
+True and True   # True  (both must be True)
 True and False  # False
-True or False   # True
+True or False   # True  (at least one True)
+False or False  # False
 not True        # False
+not False       # True
 
+# Short-circuit evaluation
 x = 5
-x > 0 and x < 10   # True
-x < 0 or x > 3     # True
+x > 0 and x < 10   # True (both checks pass)
+x < 0 or x > 3     # True (second is True)
 ```
 
 ---
@@ -452,6 +571,7 @@ x < 0 or x > 3     # True
 ### 🌿 if / elif / else
 ```python
 score = 85
+
 if score >= 90:
     grade = "S-Rank"
 elif score >= 70:
@@ -461,14 +581,28 @@ elif score >= 50:
 else:
     grade = "Try Again"
 
+print(grade)   # A-Rank
+
 # Ternary (one-liner if)
 label = "Pass" if score >= 60 else "Fail"
+```
+
+**Nesting conditionals:**
+```python
+if hp > 0:
+    if mana > 10:
+        print("Cast spell!")
+    else:
+        print("Not enough mana.")
+else:
+    print("You are defeated!")
 ```
 
 ---
 
 ### 🔁 for Loops
 ```python
+# Basic range
 for i in range(5):        # 0,1,2,3,4
     print(i)
 
@@ -478,13 +612,16 @@ for i in range(1, 6):     # 1,2,3,4,5
 for i in range(0, 10, 2): # 0,2,4,6,8 (step 2)
     print(i)
 
+# Iterating a list
 items = ["sword", "shield", "potion"]
 for item in items:
     print(item)
 
+# enumerate — get index AND value
 for idx, item in enumerate(items):
     print(f"{idx}: {item}")
 
+# zip — iterate two lists together
 names  = ["Alex", "Sam"]
 scores = [90, 75]
 for name, score in zip(names, scores):
@@ -497,44 +634,60 @@ for name, score in zip(names, scores):
 ```python
 health = 100
 rounds = 0
+
 while health > 0:
     health -= 25
     rounds += 1
+    print(f"Round {rounds}, HP: {health}")
 
+print("Defeated!")
+
+# Infinite loop with break
+attempts = 0
 while True:
-    if condition:
-        break   # exit the loop
+    attempts += 1
+    if attempts >= 3:
+        break       # exit the loop
+print(f"Broke after {attempts} attempts")
 ```
 
 ---
 
 ### ⏭️ break / continue / pass
 ```python
+# break — stop the loop entirely
 for i in range(10):
     if i == 5:
-        break      # stop entirely → prints 0-4
+        break
+    print(i)   # prints 0-4
 
+# continue — skip this iteration, keep going
 for i in range(5):
     if i == 2:
-        continue   # skip this one → prints 0,1,3,4
+        continue
+    print(i)   # prints 0,1,3,4
 
+# pass — do nothing (placeholder)
 for i in range(3):
-    pass           # placeholder — do nothing
+    pass   # valid empty loop
 ```
 
 ---
 
-### 🧠 List Comprehensions
+### 🧠 List Comprehensions (compact loops)
 ```python
-squares = [x**2 for x in range(6)]
-evens   = [x for x in range(10) if x%2==0]
-upper   = [s.upper() for s in ["a","b","c"]]
+squares   = [x**2 for x in range(6)]      # [0,1,4,9,16,25]
+evens     = [x for x in range(10) if x%2==0]  # [0,2,4,6,8]
+upper_items = [s.upper() for s in ["a","b","c"]]
 ```
 
-> 💡 **Pro Tip:** Use `for` when you know the number of iterations; `while` when waiting for a condition.
+---
+
+> 💡 **Pro Tip:** Use `for` when you know the number of iterations; use `while` when waiting for a condition.
         """,
         "code_example": '''# 🔀 Logic & Loops — Full Demo
 
+# Conditional logic
 score = 85
 if score >= 90:
     grade = "S-Rank ⭐"
@@ -546,25 +699,30 @@ else:
     grade = "Keep Trying 💪"
 print(f"Score {score} → {grade}")
 
+# Ternary
 label = "PASS" if score >= 60 else "FAIL"
 print(f"Result: {label}")
 
+# for loop with range
 print("\\nCounting up:")
 for i in range(1, 6):
     print(f"  {i}", end=" ")
 
+# enumerate
 print("\\n\\nInventory:")
-items = ["Sword","Shield","Potion"]
+items = ["🗡️ Sword","🛡️ Shield","🧪 Potion"]
 for idx, item in enumerate(items, start=1):
     print(f"  Slot {idx}: {item}")
 
+# zip
 print("\\nParty stats:")
-names   = ["Alex","Sam","Jordan"]
+names  = ["Alex","Sam","Jordan"]
 hp_vals = [120, 95, 80]
 for hero, hp in zip(names, hp_vals):
     bar = "█" * (hp // 20)
     print(f"  {hero:8s} {bar} {hp}")
 
+# while with break
 print("\\nBoss fight:")
 boss_hp = 100
 turn = 0
@@ -576,7 +734,15 @@ while boss_hp > 0:
     if turn >= 5:
         break
 
-print("\\nSquares: ", [x**2 for x in range(6)])
+# continue
+print("\\nEven items only:")
+for i in range(10):
+    if i % 2 != 0:
+        continue
+    print(f"  {i}", end=" ")
+
+# List comprehension
+print("\\n\\nSquares: ", [x**2 for x in range(6)])
 print("Evens:   ", [x for x in range(10) if x % 2 == 0])
 ''',
         "questions": [
@@ -626,15 +792,6 @@ print("Evens:   ", [x for x in range(10) if x % 2 == 0])
              "options": ["[1,2,3,4]", "[(1,3),(2,4)]", "[(1,2),(3,4)]", "[[1,3],[2,4]]"],
              "answer": "[(1,3),(2,4)]"},
         ],
-        "boss": {
-            "name": "The Loop Lord ♾️",
-            "xp_reward": 60,
-            "lore": "An ancient construct that spins in infinite cycles, trapping adventurers forever. It can only be stopped by those who know the secret escape word.",
-            "challenge": "The Loop Lord has you caught in an infinite spin! 🔀 Type the single Python keyword that immediately terminates a loop and jumps to the code after it.",
-            "hint": "One word. Used inside `for` and `while` to escape early. Not `return`, not `exit`.",
-            "accepted": ["break"],
-            "display_answer": "break",
-        },
     },
     3: {
         "title": "Lists & Dictionaries", "subtitle": "The Inventory",
@@ -649,38 +806,44 @@ Python's most powerful built-in collections. Lists are your **ordered item bags*
 ### 📋 Lists — Ordered, Mutable Sequences
 
 ```python
-empty   = []
-numbers = [1, 2, 3, 4, 5]
-mixed   = [42, "hello", True, 3.14]
-nested  = [[1,2], [3,4]]
+# Creating lists
+empty    = []
+numbers  = [1, 2, 3, 4, 5]
+mixed    = [42, "hello", True, 3.14]
+nested   = [[1,2], [3,4], [5,6]]
 ```
 
 **Indexing & Slicing:**
 ```python
 items = ["sword", "shield", "potion", "map", "key"]
-items[0]     # "sword"   first
-items[-1]    # "key"     last
-items[1:3]   # ["shield","potion"]
-items[::-1]  # reversed
+items[0]     # "sword"   (first)
+items[-1]    # "key"     (last)
+items[1:3]   # ["shield","potion"] (index 1 up to but not including 3)
+items[:2]    # ["sword","shield"]  (from start)
+items[2:]    # ["potion","map","key"] (to end)
+items[::2]   # every 2nd: ["sword","potion","key"]
+items[::-1]  # reversed: ["key","map","potion","shield","sword"]
 ```
 
-**Modifying:**
+**Modifying Lists:**
 ```python
 items.append("torch")      # add to end
-items.insert(0, "helmet")  # add at index
+items.insert(0, "helmet")  # add at index 0
 items.remove("shield")     # remove first occurrence
-items.pop()                # remove & return last
-items.sort()               # sort in-place
+items.pop()                # remove & return last item
+items.pop(1)               # remove & return item at index 1
+items.sort()               # sort in-place (alphabetical)
+items.sort(reverse=True)   # sort descending
 items.reverse()            # reverse in-place
-items.clear()              # remove all
+items.clear()              # remove all elements
 ```
 
-**Info:**
+**List Info:**
 ```python
-len(items)          # count
-items.count("x")    # occurrences
-items.index("x")    # first position
-"sword" in items    # membership test
+len(items)          # number of items
+items.count("x")    # how many times x appears
+items.index("x")    # first index of x
+"sword" in items    # True/False — membership test
 ```
 
 ---
@@ -688,70 +851,130 @@ items.index("x")    # first position
 ### 📖 Dictionaries — Key-Value Stores
 
 ```python
+# Creating dicts
+hero = {}                               # empty
 hero = {"name": "Alex", "hp": 100, "class": "Wizard"}
+hero = dict(name="Alex", hp=100)        # keyword style
+```
 
+**Accessing & Modifying:**
+```python
 hero["name"]             # "Alex"
-hero.get("mp", 0)        # 0 (safe default)
-hero["level"] = 5        # add key
-del hero["class"]        # delete key
+hero.get("name")         # "Alex" (safe — no KeyError)
+hero.get("mp", 0)        # 0 if "mp" key doesn't exist
 
-for key, value in hero.items():
+hero["level"] = 5        # add new key
+hero["hp"] = 120         # update existing key
+del hero["class"]        # delete a key
+hero.pop("level", None)  # remove & return (safe)
+```
+
+**Iterating:**
+```python
+for key in hero:                    # iterate keys
+    print(key)
+
+for key, value in hero.items():     # iterate key-value pairs
     print(f"{key}: {value}")
+
+hero.keys()    # dict_keys(["name","hp",...])
+hero.values()  # dict_values(["Alex",100,...])
+hero.items()   # dict_items([("name","Alex"),...])
+```
+
+**Merging:**
+```python
+defaults = {"hp": 100, "mp": 50, "level": 1}
+custom   = {"name": "Alex", "hp": 150}
+merged   = {**defaults, **custom}  # custom overrides defaults
+defaults.update(custom)            # in-place merge
 ```
 
 ---
 
-### 🔵 Tuples & Sets
+### 🔵 Tuples — Immutable Sequences
 ```python
-coords  = (10, 20)       # immutable
-unique  = {1, 2, 2, 3}   # → {1, 2, 3} no duplicates
+coords   = (10, 20)          # can't be changed
+rgb      = (255, 128, 0)
+name, age = ("Alex", 25)     # tuple unpacking
+singleton = (42,)            # comma makes it a tuple!
+```
+
+---
+
+### 🟣 Sets — Unique, Unordered
+```python
+unique_items = {1, 2, 3, 2, 1}   # {1, 2, 3}
+s = set([1, 2, 2, 3, 3])         # {1, 2, 3}
+s.add(4)
+s.remove(1)
+{1,2,3} & {2,3,4}   # {2,3} intersection
+{1,2,3} | {2,3,4}   # {1,2,3,4} union
 ```
 
 ---
 
 ### ⚡ Comprehensions
 ```python
-squares = [x**2 for x in range(5)]
-sq_dict = {x: x**2 for x in range(5)}
-sq_set  = {x**2 for x in range(5)}
+squares_list = [x**2 for x in range(5)]       # list
+squares_set  = {x**2 for x in range(5)}        # set
+squares_dict = {x: x**2 for x in range(5)}     # dict
 ```
 
-> 💡 **Pro Tip:** Use `dict.get(key, default)` instead of `dict[key]` to avoid `KeyError`.
+---
+
+> 💡 **Pro Tip:** Use `dict.get(key, default)` instead of `dict[key]` when the key might not exist — it avoids a `KeyError`.
         """,
         "code_example": '''# 🎒 Lists & Dictionaries — Full Demo
 
+# === LISTS ===
 inventory = ["sword", "shield", "potion"]
+
 inventory.append("map")
 inventory.insert(0, "helmet")
 inventory.remove("shield")
-popped = inventory.pop()
+popped = inventory.pop()   # removes last
 
 print("Inventory:", inventory)
 print("Popped:   ", popped)
 print("Length:   ", len(inventory))
+print("Index 0:  ", inventory[0])
 print("Slice 1:3:", inventory[1:3])
 print("Reversed: ", inventory[::-1])
 
+# Sorting
 scores = [42, 15, 88, 7, 63]
 scores.sort()
-print("\\nSorted:    ", scores)
-print("Max/Min/Sum:", max(scores), min(scores), sum(scores))
+print("\\nSorted:   ", scores)
+print("Max:      ", max(scores))
+print("Min:      ", min(scores))
+print("Sum:      ", sum(scores))
 
-powered    = [item.upper() for item in inventory]
+# List comprehension
+powered = [item.upper() for item in inventory]
+print("\\nPowered:  ", powered)
 even_scores = [s for s in scores if s % 2 == 0]
-print("\\nPowered:    ", powered)
 print("Even scores:", even_scores)
 
+# === DICTIONARIES ===
 print("\\n--- Hero Sheet ---")
-hero = {"name": "Alex", "hp": 100, "mp": 50, "class": "Wizard", "level": 3}
-hero["xp"] = 250
-hero["hp"] = 120
-missing = hero.get("gold", 0)
+hero = {
+    "name":  "Alex",
+    "hp":    100,
+    "mp":    50,
+    "class": "Wizard",
+    "level": 3,
+}
+
+hero["xp"] = 250           # add key
+hero["hp"] = 120           # update key
+missing = hero.get("gold", 0)  # safe get
 
 for stat, val in hero.items():
     print(f"  {stat:8s}: {val}")
 print(f"  gold    : {missing} (default)")
 
+# Nested dict
 party = {
     "Alex":   {"hp": 120, "role": "Wizard"},
     "Sam":    {"hp":  95, "role": "Rogue"},
@@ -761,8 +984,9 @@ print("\\n--- Party ---")
 for name, stats in party.items():
     print(f"  {name}: HP={stats['hp']}, {stats['role']}")
 
+# === SET ===
 visited = {"dungeon", "forest", "cave", "dungeon"}
-print("\\nVisited zones:", visited)
+print("\\nVisited zones:", visited)  # no duplicates
 ''',
         "questions": [
             {"q": "How do you add an element to the END of a list `my_list`?",
@@ -782,7 +1006,8 @@ print("\\nVisited zones:", visited)
             {"q": "What does `sorted([3,1,2])` return?",
              "options": ["[3,1,2]", "[1,2,3]", "[3,2,1]", "None"], "answer": "[1,2,3]"},
             {"q": "What does `dict.keys()` return?",
-             "options": ["All values", "All keys", "All items as tuples", "Length of dict"], "answer": "All keys"},
+             "options": ["All values", "All keys", "All items as tuples", "Length of dict"],
+             "answer": "All keys"},
             {"q": "What is `{'a':1, 'b':2}['a']`?",
              "options": ["2", "1", "'a'", "Error"], "answer": "1"},
             {"q": "What does `list.insert(0, x)` do?",
@@ -813,15 +1038,6 @@ print("\\nVisited zones:", visited)
              "options": ["Creates a new dict", "Merges other into dict", "Returns the length", "Clears the dict"],
              "answer": "Merges other into dict"},
         ],
-        "boss": {
-            "name": "The Inventory Demon 📦",
-            "xp_reward": 70,
-            "lore": "A hoarder of stolen items who lurks at the bottom of your list. It can only be banished by naming the exact method that adds items to a list's end.",
-            "challenge": "The Inventory Demon stole your last item! 🎒 Type the list method — with dot and empty parentheses — that adds an element to the END of a list.",
-            "hint": "Called like: `my_list.___(item)` — it always adds to the end, never the start.",
-            "accepted": [".append()", "append()", ".append"],
-            "display_answer": ".append()",
-        },
     },
     4: {
         "title": "Functions", "subtitle": "The Spells",
@@ -829,76 +1045,127 @@ print("\\nVisited zones:", visited)
         "description": """
 ## ✨ Chapter 4 — Functions
 
-Functions are **reusable blocks of code** — your hero's spellbook. Define once, cast anywhere.
+Functions are **reusable blocks of code** — your hero's spellbook. Define once, cast anywhere. They make code organised, testable and maintainable.
 
 ---
 
-### 📝 Defining & Calling
+### 📝 Defining & Calling Functions
 ```python
+# Basic function
 def greet(name):
     return f"Welcome, {name}!"
 
 result = greet("Alex")   # call it
+print(result)            # Welcome, Alex!
+
+# Function with multiple parameters
+def add(a, b):
+    return a + b
+
+print(add(3, 4))   # 7
 ```
 
 ---
 
-### 🎯 Parameters
+### 🎯 Parameters & Arguments
+
+**Default parameters** (optional when calling):
 ```python
-# Default parameters
 def cast_spell(name, power=10, critical=False):
     damage = power * (2 if critical else 1)
     return f"{name} deals {damage} damage!"
 
-cast_spell("Fireball")               # power=10
-cast_spell("Lightning", power=30)
-cast_spell("Thunder", 20, True)
+cast_spell("Fireball")               # power=10, critical=False
+cast_spell("Lightning", power=30)    # critical=False
+cast_spell("Thunder", 20, True)      # all args provided
+cast_spell("Bolt", critical=True)    # keyword argument
+```
 
-# *args — positional as tuple
+**`*args` — variable positional arguments** (collected as a tuple):
+```python
 def total(*numbers):
     return sum(numbers)
 
-# **kwargs — keyword args as dict
+total(1, 2, 3)         # 6
+total(10, 20, 30, 40)  # 100
+```
+
+**`**kwargs` — variable keyword arguments** (collected as a dict):
+```python
 def show_stats(**stats):
-    for k, v in stats.items():
-        print(f"  {k}: {v}")
-show_stats(hp=100, mp=50)
+    for key, val in stats.items():
+        print(f"  {key}: {val}")
+
+show_stats(hp=100, mp=50, level=3)
 ```
 
 ---
 
 ### 🔄 Return Values
-```python
-def min_max(numbers):
-    return min(numbers), max(numbers)   # tuple
 
-low, high = min_max([3,1,4,1,5,9])
+```python
+def divide(a, b):
+    if b == 0:
+        return None          # early return
+    return a / b
+
+# Return multiple values (tuple)
+def min_max(numbers):
+    return min(numbers), max(numbers)
+
+low, high = min_max([3, 1, 4, 1, 5, 9])
+# low=1, high=9
 ```
 
 ---
 
-### 🌍 Scope
+### 🌍 Scope — Local vs Global
 ```python
-score = 100        # global
+score = 100         # global variable
 
-def update():
-    global score   # required to modify global
+def update_score():
+    global score    # declare intent to modify global
     score += 50
 
-def example():
-    x = 99         # local — invisible outside
+update_score()
+print(score)   # 150
+
+def local_example():
+    x = 99      # local — only exists inside this function
+    return x
+# print(x)  would raise NameError!
 ```
 
 ---
 
-### ⚡ Lambda & Higher-Order Functions
+### ⚡ Lambda Functions (Anonymous)
 ```python
 double  = lambda x: x * 2
+add     = lambda a, b: a + b
 is_even = lambda n: n % 2 == 0
 
-list(map(lambda x: x*2, [1,2,3]))      # [2,4,6]
-list(filter(lambda x: x>2, [1,2,3,4])) # [3,4]
-sorted(heroes, key=lambda h: h["hp"])
+double(5)     # 10
+add(3, 4)     # 7
+
+# Common use: as key functions
+nums = [5, 2, 8, 1, 9]
+nums.sort(key=lambda x: -x)   # sort descending
+```
+
+---
+
+### 🗺️ Higher-Order Functions
+```python
+# map — apply function to each element
+list(map(lambda x: x*2, [1,2,3]))    # [2,4,6]
+list(map(str, [1,2,3]))              # ['1','2','3']
+
+# filter — keep elements where function is True
+list(filter(lambda x: x>2, [1,2,3,4]))   # [3,4]
+
+# sorted with key
+heroes = [{"name":"Alex","hp":120},{"name":"Sam","hp":95}]
+sorted(heroes, key=lambda h: h["hp"])    # sorted by hp
 ```
 
 ---
@@ -906,80 +1173,101 @@ sorted(heroes, key=lambda h: h["hp"])
 ### 🔁 Recursion
 ```python
 def factorial(n):
-    if n <= 1: return 1        # base case!
-    return n * factorial(n-1)
+    if n <= 1:            # base case — MUST have one!
+        return 1
+    return n * factorial(n - 1)   # recursive call
 
-factorial(5)  # 120
+factorial(5)   # 120  (5*4*3*2*1)
+
+def fibonacci(n):
+    if n <= 1: return n
+    return fibonacci(n-1) + fibonacci(n-2)
 ```
 
 ---
 
 ### 📄 Docstrings
 ```python
-def damage(base, crit=False):
-    \"\"\"Calculate damage dealt.
+def calculate_damage(base, multiplier=1.0, critical=False):
+    \"\"\"
+    Calculate damage dealt to an enemy.
 
     Args:
-        base (int): Base damage.
-        crit (bool): Critical hit flag.
+        base (int): Base damage value.
+        multiplier (float): Damage multiplier (default 1.0).
+        critical (bool): Whether it is a critical hit.
+
     Returns:
-        int: Final damage.
+        int: Final damage dealt.
     \"\"\"
-    return base * (2 if crit else 1)
+    dmg = int(base * multiplier * (2 if critical else 1))
+    return dmg
+
+help(calculate_damage)   # shows the docstring
 ```
 
-> 💡 **Pro Tip:** A function should do ONE thing well. If it does three things, split it into three functions!
+---
+
+> 💡 **Pro Tip:** Every function should do ONE thing well. If your function is doing three different things, split it into three functions!
         """,
         "code_example": '''# ✨ Functions — Full Demo
 
+# Basic function
 def greet(name):
     return f"Welcome, {name}! Your quest begins."
 
+# Default params + critical hit
 def cast_spell(spell_name, power=10, critical=False):
     damage = power * (2 if critical else 1)
     return f"⚡ {spell_name} deals {damage} damage!"
 
+# *args
 def total_xp(*xp_gains):
     return sum(xp_gains)
 
+# **kwargs
 def create_hero(**attributes):
     return {k: v for k, v in attributes.items()}
 
+# Multiple return values
 def analyze_scores(scores):
     return min(scores), max(scores), sum(scores)/len(scores)
 
+# Recursive factorial
 def factorial(n):
     if n <= 1: return 1
     return n * factorial(n - 1)
 
+# Lambda
 double = lambda x: x * 2
 
-heroes = [
-    {"name":"Alex","hp":120},
-    {"name":"Sam","hp":95},
-    {"name":"Jordan","hp":80},
-]
+# higher-order functions
+heroes = [{"name":"Alex","hp":120},{"name":"Sam","hp":95},{"name":"Jordan","hp":80}]
 
+# --- Run it all ---
 print(greet("Alex"))
 print(cast_spell("Fireball", power=25))
 print(cast_spell("Lightning", power=30, critical=True))
 print(f"Total XP: {total_xp(50, 30, 20, 15)}")
 
-hero = create_hero(name="Zara", hp=100, level=5)
+hero = create_hero(name="Zara", hp=100, class_="Mage", level=5)
 print(f"\\nHero: {hero}")
 
 scores = [72, 88, 95, 61, 78]
 lo, hi, avg = analyze_scores(scores)
 print(f"\\nScores → min:{lo}, max:{hi}, avg:{avg:.1f}")
-print(f"5! = {factorial(5)}")
+
+print(f"\\n5! = {factorial(5)}")
 print(f"Double 7 = {double(7)}")
 
-nums    = [1, 2, 3, 4, 5, 6]
-doubled = list(map(lambda x: x*2, nums))
-evens   = list(filter(lambda x: x%2==0, nums))
+# map + filter
+nums = [1, 2, 3, 4, 5, 6]
+doubled  = list(map(lambda x: x*2, nums))
+evens    = list(filter(lambda x: x%2==0, nums))
 print(f"\\nDoubled: {doubled}")
 print(f"Evens:   {evens}")
 
+# sort by hp
 ranked = sorted(heroes, key=lambda h: h["hp"], reverse=True)
 print("\\nHero ranking by HP:")
 for i, h in enumerate(ranked, 1):
@@ -1005,7 +1293,8 @@ for i, h in enumerate(ranked, 1):
              "options": ["Creates a new variable", "Makes a variable accessible everywhere", "Modifies a global variable from inside a function", "Deletes a global variable"],
              "answer": "Modifies a global variable from inside a function"},
             {"q": "What does every recursive function need to avoid infinite recursion?",
-             "options": ["A global variable", "A base case", "A lambda", "A return value"], "answer": "A base case"},
+             "options": ["A global variable", "A base case", "A lambda", "A return value"],
+             "answer": "A base case"},
             {"q": "What does `list(map(lambda x: x*2, [1,2,3]))` return?",
              "options": ["[1,2,3]", "[2,4,6]", "[1,4,9]", "Error"], "answer": "[2,4,6]"},
             {"q": "What does `list(filter(lambda x: x>2, [1,2,3,4]))` return?",
@@ -1029,7 +1318,8 @@ for i, h in enumerate(ranked, 1):
              "options": ["Global variable", "Local variable", "Static variable", "Instance variable"],
              "answer": "Local variable"},
             {"q": "What is `sorted([5,2,8], key=lambda x: -x)`?",
-             "options": ["[2,5,8]", "[8,5,2]", "[5,2,8]", "[-5,-2,-8]"], "answer": "[8,5,2]"},
+             "options": ["[2,5,8]", "[8,5,2]", "[5,2,8]", "[-5,-2,-8]"],
+             "answer": "[8,5,2]"},
             {"q": "Calling `def f(): pass` returns?",
              "options": ["0", "False", "None", "Error"], "answer": "None"},
             {"q": "What does `enumerate(['a','b'])` produce on first iteration?",
@@ -1037,15 +1327,6 @@ for i, h in enumerate(ranked, 1):
             {"q": "What is `factorial(4)` if factorial(n) = n * factorial(n-1) and factorial(1)=1?",
              "options": ["8", "12", "24", "16"], "answer": "24"},
         ],
-        "boss": {
-            "name": "The Spell Caster 🪄",
-            "xp_reward": 80,
-            "lore": "An ancient wizard who jealously guards the secrets of reusable code. He challenges all who wish to harness the power of functions.",
-            "challenge": "The Spell Caster demands proof you can create a function! ✨ Type the Python keyword used to *define* a new function.",
-            "hint": "Every function starts with: `___ function_name():`",
-            "accepted": ["def"],
-            "display_answer": "def",
-        },
     },
     5: {
         "title": "The Final Boss", "subtitle": "Comprehensive Python Test",
@@ -1053,7 +1334,7 @@ for i, h in enumerate(ranked, 1):
         "description": """
 ## 🐉 Chapter 5 — The Final Boss
 
-You've mastered the four disciplines. Now face the **comprehensive gauntlet** that combines everything — plus powerful new weapons.
+You've mastered the four disciplines. Now face the **comprehensive gauntlet** that combines everything — plus three powerful new weapons.
 
 ---
 
@@ -1069,10 +1350,12 @@ You've mastered the four disciplines. Now face the **comprehensive gauntlet** th
 
 ```python
 class Hero:
-    species = "Human"          # class variable
+    # Class variable (shared by all instances)
+    species = "Human"
 
     def __init__(self, name, hp=100):
-        self.name = name       # instance variable
+        # Instance variables
+        self.name = name
         self.hp   = hp
         self.inventory = []
 
@@ -1080,151 +1363,249 @@ class Hero:
         self.hp = max(0, self.hp - amount)
         return f"{self.name} took {amount} dmg! HP: {self.hp}"
 
-    def __str__(self):
+    def pick_up(self, item):
+        self.inventory.append(item)
+
+    def __str__(self):       # controls print(hero)
         return f"Hero({self.name}, HP={self.hp})"
 
-hero = Hero("Alex", hp=120)
-print(hero.take_damage(35))
-print(hero)
+    def __repr__(self):      # controls repr(hero)
+        return f"Hero(name={self.name!r}, hp={self.hp})"
+
+# Create instances
+hero1 = Hero("Alex", hp=120)
+hero2 = Hero("Sam")           # hp defaults to 100
+
+print(hero1.take_damage(35))
+hero1.pick_up("sword")
+print(hero1)                  # Hero(Alex, HP=85)
+print(Hero.species)           # "Human"
 ```
 
 **Inheritance:**
 ```python
 class Wizard(Hero):
     def __init__(self, name, hp=80, mp=100):
-        super().__init__(name, hp)
+        super().__init__(name, hp)   # call parent __init__
         self.mp = mp
 
     def cast(self, spell, cost=10):
         if self.mp >= cost:
             self.mp -= cost
-            return f"✨ {spell} cast!"
+            return f"✨ {spell} cast! MP: {self.mp}"
         return "Not enough MP!"
 
-isinstance(Wizard("Merlin"), Hero)   # True
+wizard = Wizard("Merlin")
+print(wizard.cast("Fireball", cost=20))
+print(isinstance(wizard, Hero))    # True
 ```
 
 ---
 
-### 🛡️ Error Handling
+### 🛡️ Error Handling — try / except
 
 ```python
+# Catch specific exceptions
 try:
     result = 10 / 0
 except ZeroDivisionError:
     result = 0
-except ValueError as e:
-    print(f"Error: {e}")
-else:
-    print("No errors!")       # only if no exception
-finally:
-    print("Always runs!")     # always
+    print("Cannot divide by zero!")
 
-raise ValueError("Custom error!")
+# Multiple exceptions
+try:
+    value = int("abc")
+except ValueError as e:
+    print(f"ValueError: {e}")
+except TypeError as e:
+    print(f"TypeError: {e}")
+else:
+    print("No error occurred!")     # runs if no exception
+finally:
+    print("This always runs!")      # always executes
+
+# Raise custom errors
+def withdraw(balance, amount):
+    if amount > balance:
+        raise ValueError(f"Insufficient funds: {balance}")
+    return balance - amount
 ```
 
 ---
 
-### 📁 File I/O & JSON
+### 📁 File I/O
 
 ```python
-with open("data.txt", "w") as f:
-    f.write("Hello\\n")
+# Writing to a file
+with open("scores.txt", "w") as f:
+    f.write("Alex: 95\\n")
+    f.write("Sam: 87\\n")
 
-with open("data.txt", "r") as f:
+# Reading all at once
+with open("scores.txt", "r") as f:
     content = f.read()
 
-import json
-with open("save.json", "w") as f:
-    json.dump({"score": 95}, f)
+# Reading line by line
+with open("scores.txt", "r") as f:
+    for line in f:
+        print(line.strip())
 
+# Writing JSON
+import json
+data = {"player": "Alex", "score": 95}
+with open("save.json", "w") as f:
+    json.dump(data, f)
+
+# Reading JSON
 with open("save.json", "r") as f:
-    data = json.load(f)
+    loaded = json.load(f)
 ```
 
 ---
 
-### 📦 Useful Modules
+### 📦 Modules & Imports
 
 ```python
-import math, random, os
+import math
+import random
+import os
 from datetime import datetime
 from collections import Counter, defaultdict
 
-math.sqrt(16)             # 4.0
-random.randint(1, 6)      # dice roll
-random.choice(["a","b"])  # random pick
-Counter("aabbcc")         # Counter({'a':2,...})
-any([False, True])        # True
-all([True, True])         # True
+math.sqrt(16)        # 4.0
+math.pi              # 3.14159...
+random.randint(1,6)  # dice roll
+random.choice(["a","b","c"])  # random pick
+random.shuffle(mylist)
+
+os.path.exists("file.txt")
+os.getcwd()          # current directory
+datetime.now()       # current timestamp
+
+Counter("aabbcc")    # Counter({'a':2,'b':2,'c':2})
 ```
 
-> 🏆 **Final Challenge:** Score 6/10 to claim your **Python Master Certificate**!
+---
+
+### 🔮 Advanced Patterns
+```python
+# Generator — lazy evaluation
+def count_up(n):
+    for i in range(n):
+        yield i           # pauses and returns i
+
+gen = count_up(5)
+next(gen)    # 0
+next(gen)    # 1
+
+# Context manager
+class ManaPool:
+    def __enter__(self):
+        print("Mana pool opened")
+        return self
+    def __exit__(self, *args):
+        print("Mana pool closed")
+
+with ManaPool() as pool:
+    pass
+
+# any / all
+any([False, True, False])   # True
+all([True, True, True])     # True
+all([True, False, True])    # False
+```
+
+---
+
+> 🏆 **Final Challenge:** Answer 10 questions across ALL topics. Score 6/10 to claim your **Python Master Certificate**!
         """,
         "code_example": '''# 🐉 Final Boss — All Skills Combined
 
 import random
 from collections import Counter
 
+# ── OOP ──
 class Hero:
     def __init__(self, name, hp=100, mp=50):
         self.name = name
         self.hp   = hp
         self.mp   = mp
+        self.inventory = []
         self.xp   = 0
 
     def attack(self, enemy, base=20):
         crit = random.random() < 0.25
         dmg  = base * 2 if crit else base
         enemy.hp = max(0, enemy.hp - dmg)
-        tag = " CRIT!" if crit else ""
-        return f"{self.name}→{enemy.name}: {dmg} dmg{tag} (HP:{enemy.hp})"
+        tag = " 💥CRIT!" if crit else ""
+        return f"{self.name} → {enemy.name}: {dmg} dmg{tag} (HP:{enemy.hp})"
 
     def heal(self, amount=30):
-        if self.mp < 10: return "Not enough MP!"
-        self.hp = min(200, self.hp + amount)
+        if self.mp < 10:
+            return "Not enough MP!"
+        self.hp  = min(200, self.hp + amount)
         self.mp -= 10
-        return f"{self.name} healed +{amount} HP → {self.hp}"
+        return f"{self.name} healed +{amount} HP (HP:{self.hp})"
 
     def __str__(self):
-        return f"{self.name} [HP:{self.hp} MP:{self.mp}]"
+        return f"{self.name} [HP:{self.hp} MP:{self.mp} XP:{self.xp}]"
 
 class Boss(Hero):
     def __init__(self, name, hp=300, power=35):
         super().__init__(name, hp)
         self.power = power
 
-    def rage(self, hero):
+    def rage_attack(self, hero):
         dmg = self.power + random.randint(0, 20)
         hero.hp = max(0, hero.hp - dmg)
-        return f"RAGE {self.name}→{hero.name}: {dmg} dmg!"
+        return f"🐉 {self.name} RAGE → {hero.name}: {dmg} dmg!"
 
+# ── Error handling ──
 def safe_divide(a, b):
     try:
         return a / b
     except ZeroDivisionError:
         return 0
 
+# ── Higher-order / comprehensions ──
+def analyze_party(members):
+    alive  = [m for m in members if m.hp > 0]
+    hps    = [m.hp for m in members]
+    return {
+        "total":   len(members),
+        "alive":   len(alive),
+        "avg_hp":  round(sum(hps)/len(hps), 1),
+        "strongest": max(members, key=lambda m: m.hp).name,
+    }
+
+# ── Simulation ──
 hero = Hero("Alex", hp=150, mp=60)
 boss = Boss("Shadow Dragon")
-print("BATTLE START!")
-print(hero); print(boss)
 
-for r in range(1, 6):
-    print(f"\\n--- Round {r} ---")
+print("⚔️  BATTLE START!")
+print(hero)
+print(boss)
+
+for round_num in range(1, 6):
+    print(f"\\n--- Round {round_num} ---")
     print(" ", hero.attack(boss))
-    if boss.hp > 0: print(" ", boss.rage(hero))
-    if hero.hp <= 0 or boss.hp <= 0: break
+    if boss.hp > 0:
+        print(" ", boss.rage_attack(hero))
+    if hero.hp <= 0 or boss.hp <= 0:
+        break
 
-print(f"\\nWinner: {hero.name if hero.hp > 0 else boss.name}")
+winner = hero.name if hero.hp > 0 else boss.name
+print(f"\\n🏆 {winner} wins!")
 
+# Party analysis
 party = [Hero("Alex",120), Hero("Sam",95), Hero("Jordan",0)]
-alive = [m for m in party if m.hp > 0]
-hps   = [m.hp for m in party]
-print(f"\\nAlive: {len(alive)}/{len(party)}, avg HP: {sum(hps)/len(hps):.1f}")
+stats = analyze_party(party)
+print("\\n📊 Party Stats:", stats)
 
+# misc
 items = ["sword","shield","sword","potion","sword"]
-print("\\nItem freq:", dict(Counter(items)))
+freq  = Counter(items)
+print("\\n🗃️  Item frequency:", dict(freq))
 print("Safe 10/0 =", safe_divide(10, 0))
 ''',
         "questions": [
@@ -1281,15 +1662,57 @@ print("Safe 10/0 =", safe_divide(10, 0))
              "options": ["sorted() modifies in place; sort() returns a new list", "Both return None", "sorted() returns a new list; sort() modifies in place", "They are identical"],
              "answer": "sorted() returns a new list; sort() modifies in place"},
         ],
-        "boss": {
-            "name": "The Shadow Dragon 🐉",
-            "xp_reward": 100,
-            "lore": "The ultimate guardian of the Python Realm — ancient, powerful, and the source of all runtime crashes. Defeat it to prove total mastery.",
-            "challenge": "The Shadow Dragon breathes exceptions at you! 🐉 Type the keyword used in a `try` block to *catch* and handle exceptions.",
-            "hint": "Structure: `try: ... ___ SomeError: handle it`",
-            "accepted": ["except"],
-            "display_answer": "except",
-        },
+    },
+}
+
+# ============================================================
+# BOSS BATTLES  — one per level, answered by typing exact text
+# ============================================================
+BOSS_BATTLES = {
+    1: {
+        "title": "The Type Titan",
+        "icon": "🧨",
+        "flavor": "The Type Titan morphs into any data form — name the Python method that converts a string to ALL UPPERCASE letters.",
+        "hint": "It's a built-in str method. Call it like: 'hello'.????()",
+        "answer": ".upper()",
+        "xp_reward": 60,
+        "success_msg": "CRITICAL HIT! The Type Titan crumbles — it can't handle your string mastery!",
+    },
+    2: {
+        "title": "The Infinite Looper",
+        "icon": "♾️",
+        "flavor": "The Infinite Looper spins forever unless you know the exact keyword that exits a `while True:` loop instantly.",
+        "hint": "A single Python keyword — the one that exits a loop immediately.",
+        "answer": "break",
+        "xp_reward": 70,
+        "success_msg": "LOOP SHATTERED! The Infinite Looper vanishes — your control flow is flawless!",
+    },
+    3: {
+        "title": "The List Lich",
+        "icon": "📜",
+        "flavor": "The List Lich guards a forbidden list. Type the list method that adds a single item to the END of a list.",
+        "hint": "The most common list mutation method. `my_list.????(item)`",
+        "answer": ".append()",
+        "xp_reward": 80,
+        "success_msg": "APPENDED TO VICTORY! The List Lich's collection is yours now!",
+    },
+    4: {
+        "title": "The Lambda Shadow",
+        "icon": "λ",
+        "flavor": "The Lambda Shadow hides in anonymous functions. Reveal the Python keyword used to define a named function.",
+        "hint": "It comes before the function name: `??? my_func():`",
+        "answer": "def",
+        "xp_reward": 90,
+        "success_msg": "FUNCTION MASTERED! The Lambda Shadow dissolves in the light of your knowledge!",
+    },
+    5: {
+        "title": "The Final Dragon",
+        "icon": "🔥",
+        "flavor": "The Final Dragon breathes exceptions! Type the keyword that manually raises an exception in Python.",
+        "hint": "`??? ValueError('msg')` — how do you throw an exception?",
+        "answer": "raise",
+        "xp_reward": 150,
+        "success_msg": "LEGENDARY! The Final Dragon is vanquished — you are a true Python Master!",
     },
 }
 
@@ -1315,10 +1738,9 @@ def xp_to_progress(xp: int) -> float:
     max_xp = sum(v["xp_reward"] for v in LEVELS.values())
     return min(xp / max_xp, 1.0)
 
-PASS_THRESHOLD     = 6
+PASS_THRESHOLD = 6   # out of 10
 QUESTIONS_PER_EXAM = 10
 QUESTIONS_IN_BANK  = 20
-
 
 # ============================================================
 # PASSWORD HELPERS
@@ -1335,36 +1757,52 @@ def check_password(password: str, pw_hash: str) -> bool:
 # ============================================================
 def empty_progress():
     return {
-        "xp": 0, "completed_levels": [], "quiz_state": {},
-        "cert_name": "", "last_login": "", "streak": 0, "boss_beaten": [],
+        "xp": 0, "completed_levels": [], "quiz_state": {}, "cert_name": "",
+        "last_login": None, "streak": 0, "boss_battles_done": [],
     }
 
 def load_user_progress(username: str):
-    db   = get_db()
-    prog = db["progress"].get(username, empty_progress())
+    prog = get_progress_doc(username) or empty_progress()
     st.session_state.xp               = prog.get("xp", 0)
     st.session_state.completed_levels = set(prog.get("completed_levels", []))
     raw_qs = prog.get("quiz_state", {})
-    st.session_state.quiz_state        = {int(k): v for k, v in raw_qs.items()}
-    st.session_state.cert_name         = prog.get("cert_name", "")
-    st.session_state.streak            = prog.get("streak", 0)
-    st.session_state.last_login        = prog.get("last_login", "")
-    st.session_state.boss_beaten       = set(prog.get("boss_beaten", []))
+    st.session_state.quiz_state       = {int(k): v for k, v in raw_qs.items()}
+    st.session_state.cert_name        = prog.get("cert_name", "")
+    st.session_state.streak           = prog.get("streak", 0)
+    st.session_state.last_login       = prog.get("last_login", None)
+    st.session_state.boss_battles_done = set(prog.get("boss_battles_done", []))
+
+    # ── Streak logic ──
+    today = date.today().isoformat()
+    last  = st.session_state.last_login
+    if last is None:
+        st.session_state.streak = 1
+    elif last == today:
+        pass  # already counted today
+    else:
+        try:
+            last_date = date.fromisoformat(last)
+            delta     = (date.today() - last_date).days
+            if delta == 1:
+                st.session_state.streak += 1
+            elif delta > 1:
+                st.session_state.streak = 1
+        except Exception:
+            st.session_state.streak = 1
+    st.session_state.last_login = today
 
 def save_user_progress(username: str):
-    db = get_db()
-    if "progress" not in db:
-        db["progress"] = {}
-    db["progress"][username] = {
-        "xp":               st.session_state.xp,
-        "completed_levels": list(st.session_state.completed_levels),
-        "quiz_state":       {str(k): v for k, v in st.session_state.quiz_state.items()},
-        "cert_name":        st.session_state.cert_name,
-        "streak":           st.session_state.get("streak", 0),
-        "last_login":       st.session_state.get("last_login", ""),
-        "boss_beaten":      list(st.session_state.get("boss_beaten", set())),
+    data = {
+        "username":          username,
+        "xp":                st.session_state.xp,
+        "completed_levels":  list(st.session_state.completed_levels),
+        "quiz_state":        {str(k): v for k, v in st.session_state.quiz_state.items()},
+        "cert_name":         st.session_state.cert_name,
+        "last_login":        st.session_state.get("last_login", None),
+        "streak":            st.session_state.get("streak", 0),
+        "boss_battles_done": list(st.session_state.get("boss_battles_done", set())),
     }
-    flush_db()
+    set_progress_doc(username, data)
 
 
 # ============================================================
@@ -1376,43 +1814,11 @@ def init_state():
         "auth_tab": "login", "auth_error": "", "auth_success": "",
         "xp": 0, "completed_levels": set(), "quiz_state": {}, "cert_name": "",
         "current_level": 1, "show_badge": None, "view": "hub",
-        "streak": 0, "last_login": "", "boss_beaten": set(),
+        "streak": 0, "last_login": None, "boss_battles_done": set(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-
-# ============================================================
-# STREAK HELPER
-# ============================================================
-def update_streak(username: str):
-    """Called on login — updates streak and last_login in DB."""
-    today_str = date.today().isoformat()
-    db        = get_db()
-    prog      = db["progress"].get(username, empty_progress())
-    last      = prog.get("last_login", "")
-    streak    = prog.get("streak", 0)
-
-    if last:
-        try:
-            diff = (date.today() - date.fromisoformat(last)).days
-            if diff == 0:
-                pass          # same day, keep streak
-            elif diff == 1:
-                streak += 1   # consecutive day!
-            else:
-                streak = 1    # broke streak
-        except Exception:
-            streak = 1
-    else:
-        streak = 1
-
-    prog["last_login"] = today_str
-    prog["streak"]     = streak
-    db["progress"][username] = prog
-    flush_db()
-    return streak
 
 
 # ============================================================
@@ -1432,36 +1838,33 @@ def do_register(username, password, confirm):
     if password != confirm:
         st.session_state.auth_error = "Passwords do not match."
         return
-    db = get_db()
-    if username in db["users"]:
+    if get_user_doc(username) is not None:
         st.session_state.auth_error = "Username already taken. Try another."
         return
-    db["users"][username]    = {"pw_hash": hash_password(password),
-                                "registered": datetime.now().isoformat()}
-    db["progress"][username] = empty_progress()
-    flush_db()
+    set_user_doc(username, {
+        "pw_hash":    hash_password(password),
+        "registered": datetime.now().isoformat(),
+    })
+    set_progress_doc(username, {**empty_progress(), "username": username})
     st.session_state.auth_error   = ""
     st.session_state.auth_success = f"Account created! Welcome, {username} 🎉 Now log in."
     st.session_state.auth_tab     = "login"
 
 def do_login(username, password):
     username = username.strip().lower()
-    db = get_db()
-    if username not in db["users"]:
+    user_doc = get_user_doc(username)
+    if user_doc is None:
         st.session_state.auth_error = "Username not found. Please register first."
         return
-    if not check_password(password, db["users"][username]["pw_hash"]):
+    if not check_password(password, user_doc["pw_hash"]):
         st.session_state.auth_error = "Incorrect password. Try again."
         return
     st.session_state.auth_error   = ""
     st.session_state.auth_success = ""
     st.session_state.logged_in    = True
     st.session_state.username     = username
-    # ── Update streak before loading progress ──
-    new_streak = update_streak(username)
     load_user_progress(username)
-    st.session_state.streak = new_streak   # ensure session has fresh value
-    st.session_state.view   = "hub"
+    st.session_state.view = "hub"
 
 
 # ============================================================
@@ -1475,7 +1878,7 @@ def render_auth():
         '<div style="font-family:Space Mono,monospace;font-size:1.6rem;color:#fff;'
         'text-shadow:0 0 15px rgba(0,255,65,0.4);">Welcome, Adventurer</div>'
         '<div style="color:#888;font-size:0.85rem;margin-top:0.3rem;">'
-        'Create an account — XP, streaks and progress saved permanently</div>'
+        'Create an account to save your XP and progress permanently</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1484,16 +1887,24 @@ def render_auth():
     col_l, col_r = st.columns(2)
     with col_l:
         if st.button("🔓 Log In", use_container_width=True, key="tab_login"):
-            st.session_state.auth_tab = "login"; st.session_state.auth_error = ""; st.rerun()
+            st.session_state.auth_tab     = "login"
+            st.session_state.auth_error   = ""
+            st.session_state.auth_success = ""
+            st.rerun()
     with col_r:
         if st.button("✨ Register", use_container_width=True, key="tab_reg"):
-            st.session_state.auth_tab = "register"; st.session_state.auth_error = ""; st.rerun()
+            st.session_state.auth_tab     = "register"
+            st.session_state.auth_error   = ""
+            st.session_state.auth_success = ""
+            st.rerun()
 
     active = st.session_state.auth_tab
     st.markdown(
         f'<div style="display:flex;gap:0;margin-bottom:1.5rem;">'
-        f'<div style="flex:1;height:3px;background:{"#00FF41" if active=="login" else "#2A2A2A"};border-radius:2px 0 0 2px;"></div>'
-        f'<div style="flex:1;height:3px;background:{"#00FF41" if active=="register" else "#2A2A2A"};border-radius:0 2px 2px 0;"></div></div>',
+        f'<div style="flex:1;height:3px;background:{"#00FF41" if active=="login" else "#2A2A2A"};'
+        f'border-radius:2px 0 0 2px;"></div>'
+        f'<div style="flex:1;height:3px;background:{"#00FF41" if active=="register" else "#2A2A2A"};'
+        f'border-radius:0 2px 2px 0;"></div></div>',
         unsafe_allow_html=True,
     )
 
@@ -1501,7 +1912,9 @@ def render_auth():
         st.markdown(
             f'<div style="background:rgba(255,68,68,0.12);border-left:4px solid #FF4444;'
             f'border-radius:0 8px 8px 0;padding:0.8rem 1rem;color:#FF8888;margin-bottom:0.8rem;">'
-            f'⚠️ {st.session_state.auth_error}</div>', unsafe_allow_html=True)
+            f'⚠️ {st.session_state.auth_error}</div>',
+            unsafe_allow_html=True,
+        )
     if st.session_state.auth_success:
         st.markdown(f'<div class="success-box">✅ {st.session_state.auth_success}</div>', unsafe_allow_html=True)
 
@@ -1510,159 +1923,115 @@ def render_auth():
         password = st.text_input("Password", type="password", placeholder="••••••••", key="li_pass")
         st.markdown("")
         if st.button("⚡ Log In & Start Adventure", use_container_width=True, key="login_btn"):
-            do_login(username, password); st.rerun()
-        st.markdown('<div style="text-align:center;color:#555;font-size:0.78rem;margin-top:1rem;">'
-                    "No account yet? Click <strong style='color:#9D46FF'>Register</strong> above.</div>",
-                    unsafe_allow_html=True)
+            do_login(username, password)
+            st.rerun()
+        st.markdown(
+            '<div style="text-align:center;color:#555;font-size:0.78rem;margin-top:1rem;">'
+            "No account yet? Click <strong style='color:#9D46FF'>Register</strong> above.</div>",
+            unsafe_allow_html=True,
+        )
     else:
         username = st.text_input("Choose a Username", placeholder="coolcoder99 (min 3 chars)", key="reg_user")
         password = st.text_input("Choose a Password", type="password", placeholder="Min. 6 characters", key="reg_pass")
         confirm  = st.text_input("Confirm Password",  type="password", placeholder="Repeat password",   key="reg_conf")
         st.markdown("")
         if st.button("🚀 Create My Account", use_container_width=True, key="reg_btn"):
-            do_register(username, password, confirm); st.rerun()
-        st.markdown('<div style="text-align:center;color:#555;font-size:0.78rem;margin-top:1rem;">'
-                    "Already have an account? Click <strong style='color:#00FF41'>Log In</strong> above.</div>",
-                    unsafe_allow_html=True)
+            do_register(username, password, confirm)
+            st.rerun()
+        st.markdown(
+            '<div style="text-align:center;color:#555;font-size:0.78rem;margin-top:1rem;">'
+            "Already have an account? Click <strong style='color:#00FF41'>Log In</strong> above.</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown(
-        '<div style="text-align:center;margin-top:2.5rem;padding:0.8rem;background:#111;border:1px dashed #333;border-radius:8px;">'
-        '<span style="font-size:0.75rem;color:#555;">💾 Progress saved to disk. '
-        '🔥 Log in on consecutive days to build your streak and earn bonus XP!</span></div>',
+        '<div style="text-align:center;margin-top:2.5rem;padding:0.8rem;'
+        'background:#111;border:1px dashed #333;border-radius:8px;">'
+        '<span style="font-size:0.75rem;color:#555;">☁️ Progress is saved to Firestore (cloud) and visible on the global leaderboard. '
+        'Log back in from any device to continue your adventure!</span></div>',
         unsafe_allow_html=True,
     )
-
-
-# ============================================================
-# PRACTICE LAB (SANDBOX)
-# ============================================================
-def render_practice_lab():
-    with st.expander("🧪 Practice Lab", expanded=False):
-        st.markdown('<p class="sandbox-label">// Write Python below and hit Run ▶</p>', unsafe_allow_html=True)
-        code = st.text_area(
-            "code_input", height=150, key="sandbox_code",
-            placeholder='print("Hello, World!")\nfor i in range(5):\n    print(i)',
-            label_visibility="collapsed",
-        )
-        col_run, col_clr = st.columns([3, 1])
-        with col_run:
-            run_clicked = st.button("▶ Run Code", key="sandbox_run", use_container_width=True)
-        with col_clr:
-            if st.button("✕", key="sandbox_clear", use_container_width=True):
-                st.session_state.sandbox_output = ""
-                st.session_state.sandbox_error  = ""
-
-        if run_clicked:
-            if code.strip():
-                buf        = io.StringIO()
-                old_stdout = sys.stdout
-                sys.stdout = buf
-                try:
-                    exec(compile(code, "<sandbox>", "exec"), {})
-                    st.session_state.sandbox_output = buf.getvalue() or "(no output)"
-                    st.session_state.sandbox_error  = ""
-                except Exception:
-                    st.session_state.sandbox_error  = traceback.format_exc()
-                    st.session_state.sandbox_output = ""
-                finally:
-                    sys.stdout = old_stdout
-
-        output = st.session_state.get("sandbox_output", "")
-        error  = st.session_state.get("sandbox_error",  "")
-        if output:
-            st.markdown(f'<div class="sandbox-output">{output}</div>', unsafe_allow_html=True)
-        if error:
-            st.markdown(f'<div class="sandbox-error">{error}</div>', unsafe_allow_html=True)
-        if not output and not error:
-            st.markdown('<div class="sandbox-label" style="color:#333;">// output will appear here</div>',
-                        unsafe_allow_html=True)
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 def render_sidebar():
-    xp        = st.session_state.xp
+    xp    = st.session_state.xp
     title, icon = get_character_info(xp)
     max_xp    = sum(v["xp_reward"] for v in LEVELS.values())
     completed = len(st.session_state.completed_levels)
-    streak    = st.session_state.get("streak", 0)
 
     with st.sidebar:
         st.markdown(
-            '<p class="pixel-font" style="font-size:0.5rem;color:#00FF41;text-align:center;letter-spacing:0.2em;">PYTHON ADVENTURE</p>',
-            unsafe_allow_html=True)
-
-        # ── Streak banner ──
-        if streak >= 2:
-            st.markdown(
-                f'<div class="streak-badge">🔥 {streak}-Day Streak! +20% XP</div>',
-                unsafe_allow_html=True)
-        elif streak == 1:
-            st.markdown(
-                '<div style="text-align:center;font-size:0.68rem;color:#FF9000;font-family:Space Mono,monospace;'
-                'padding:0.3rem 0;">🔥 Log in tomorrow to start a streak!</div>',
-                unsafe_allow_html=True)
-
+            '<p class="pixel-font" style="font-size:0.5rem;color:#00FF41;'
+            'text-align:center;letter-spacing:0.2em;">PYTHON ADVENTURE</p>',
+            unsafe_allow_html=True,
+        )
         st.markdown(
-            f'<div style="text-align:center;padding:0.6rem 0;">'
-            f'<div style="font-size:2.8rem;">{icon}</div>'
+            f'<div style="text-align:center;padding:0.8rem 0;">'
+            f'<div style="font-size:3rem;">{icon}</div>'
             f'<div style="font-family:Space Mono,monospace;font-size:0.9rem;color:#fff;font-weight:700;">{title}</div>'
             f'<div style="font-size:0.72rem;color:#00FF41;margin-top:0.2rem;">@{st.session_state.username}</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         st.markdown("---")
         st.markdown(
             f'<div class="stat-row"><span style="color:#888">XP</span>'
             f'<span class="xp-badge">{xp} / {max_xp}</span></div>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True,
+        )
         st.progress(xp_to_progress(xp))
         st.markdown(
             f'<div class="stat-row"><span style="color:#888">Levels Done</span>'
             f'<span style="color:#00FF41;font-family:Space Mono,monospace;">{completed} / 5</span></div>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True,
+        )
         st.markdown(
             f'<div class="stat-row"><span style="color:#888">Pass mark</span>'
             f'<span style="color:#9D46FF;font-family:Space Mono,monospace;">6 / 10 (60%)</span></div>',
-            unsafe_allow_html=True)
-        # Boss beaten count
-        boss_count = len(st.session_state.get("boss_beaten", set()))
-        st.markdown(
-            f'<div class="stat-row"><span style="color:#888">Bosses Beaten</span>'
-            f'<span style="color:#FF4444;font-family:Space Mono,monospace;">💀 {boss_count} / 5</span></div>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True,
+        )
 
         st.markdown("---")
-        st.markdown('<p style="font-family:Space Mono,monospace;font-size:0.7rem;color:#666;margin-bottom:0.4rem;">LEVEL MAP</p>',
-                    unsafe_allow_html=True)
+        st.markdown('<p style="font-family:Space Mono,monospace;font-size:0.7rem;color:#666;margin-bottom:0.4rem;">LEVEL MAP</p>', unsafe_allow_html=True)
         for lvl_id, lvl in LEVELS.items():
-            st_icon = {"done": "✅", "unlocked": "🔓", "locked": "🔒"}[level_status(lvl_id)]
-            color   = {"done": "#00FF41", "unlocked": "#E8E8E8", "locked": "#555"}[level_status(lvl_id)]
-            qs      = st.session_state.quiz_state.get(lvl_id, {})
+            st_icon = {"done":"✅","unlocked":"🔓","locked":"🔒"}[level_status(lvl_id)]
+            color   = {"done":"#00FF41","unlocked":"#E8E8E8","locked":"#555"}[level_status(lvl_id)]
+            # show score if attempted
+            qs = st.session_state.quiz_state.get(lvl_id, {})
             score_txt = f" ({qs.get('score',0)}/10)" if qs.get("submitted") else ""
-            boss_icon = " 💀" if lvl_id in st.session_state.get("boss_beaten", set()) else ""
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.72rem;">'
                 f'<span>{st_icon}</span>'
-                f'<span style="color:{color};font-family:Space Mono,monospace;">L{lvl_id}: {lvl["subtitle"]}{score_txt}{boss_icon}</span></div>',
-                unsafe_allow_html=True)
+                f'<span style="color:{color};font-family:Space Mono,monospace;">L{lvl_id}: {lvl["subtitle"]}{score_txt}</span></div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
         if st.button("🏠 Adventure Hub", use_container_width=True):
-            st.session_state.view = "hub"; st.rerun()
-        if st.button("🏆 Leaderboard", use_container_width=True):
-            st.session_state.view = "leaderboard"; st.rerun()
+            st.session_state.view = "hub"
+            st.rerun()
         if st.button("🚪 Log Out", use_container_width=True):
             save_user_progress(st.session_state.username)
             for k in ["logged_in","username","xp","completed_levels","quiz_state",
                       "cert_name","current_level","show_badge","view",
-                      "streak","last_login","boss_beaten","sandbox_output","sandbox_error"]:
+                      "streak","last_login","boss_battles_done"]:
                 st.session_state.pop(k, None)
             st.rerun()
 
-        st.markdown("---")
-        # ── Practice Lab ──
-        render_practice_lab()
+        # ── Streak display ──
+        streak = st.session_state.get("streak", 0)
+        if streak >= 2:
+            st.markdown(
+                f'<div class="streak-badge" style="display:block;text-align:center;margin-top:0.6rem;">'
+                f'🔥 {streak}-Day Streak! &nbsp;·&nbsp; 1.2× XP Bonus</div>',
+                unsafe_allow_html=True,
+            )
+
+
 
 
 # ============================================================
@@ -1679,210 +2048,310 @@ def level_status(level_id):
 def quiz_key(level_id, q_idx):
     return f"q_{level_id}_{q_idx}"
 
-def get_exam_questions(level_id: int):
+def get_exam_questions(level_id: int) -> list[dict]:
+    """Return the 10 questions chosen for this user's exam.
+    The selection is stored in quiz_state so it never changes mid-attempt."""
     qs_data = st.session_state.quiz_state.get(level_id, {})
-    bank    = LEVELS[level_id]["questions"]
+    bank    = LEVELS[level_id]["questions"]  # 20 questions
+
     if "indices" in qs_data:
+        # Already selected — restore same set
         indices = qs_data["indices"]
     else:
+        # First visit — randomly choose 10
         indices = sorted(random.sample(range(len(bank)), QUESTIONS_PER_EXAM))
+        # Store immediately so they persist
         if level_id not in st.session_state.quiz_state:
             st.session_state.quiz_state[level_id] = {}
         st.session_state.quiz_state[level_id]["indices"] = indices
         save_user_progress(st.session_state.username)
-    return [bank[i] for i in indices], indices
 
-def streak_multiplier():
-    return 1.2 if st.session_state.get("streak", 0) >= 2 else 1.0
+    return [bank[i] for i in indices], indices
 
 
 # ============================================================
 # LEADERBOARD
 # ============================================================
 def render_leaderboard():
+    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
     st.markdown(
-        '<h1 class="neon-heading" style="font-size:1.6rem;margin-bottom:0.2rem;">🏆 Global Rankings</h1>'
-        '<p style="color:#888;font-family:Space Mono,monospace;font-size:0.75rem;">Top adventurers ranked by total XP</p>',
-        unsafe_allow_html=True)
+        '<h2 style="font-family:Space Mono,monospace;font-size:1rem;color:#FFA000;margin-bottom:0.2rem;">🏆 Global Rankings</h2>'
+        '<p style="font-size:0.75rem;color:#666;font-family:Space Mono,monospace;margin-bottom:0.8rem;">Top 10 adventurers ranked by total XP — live across all devices</p>',
+        unsafe_allow_html=True,
+    )
+
+    # Query all progress docs from Firestore (global, every user)
+    all_progress = get_all_progress()
+
+    ranked = sorted(
+        [
+            {
+                "username": p.get("username", "unknown"),
+                "xp":       p.get("xp", 0),
+                "levels":   len(p.get("completed_levels", [])),
+                "streak":   p.get("streak", 0),
+            }
+            for p in all_progress
+            if p.get("username")
+        ],
+        key=lambda r: r["xp"],
+        reverse=True,
+    )[:10]
+
+    medal = {1: "🥇", 2: "🥈", 3: "🥉"}
+    rows_html = ""
+    for rank, row in enumerate(ranked, 1):
+        is_me  = row["username"] == st.session_state.username
+        title, icon = get_character_info(row["xp"])
+        bg     = "rgba(98,0,238,0.12)" if is_me else "transparent"
+        border = "1px solid #6200EE" if is_me else "none"
+        streak_html = f'<span style="color:#FFA000;font-size:0.7rem;">🔥{row["streak"]}</span>' if row["streak"] >= 2 else ""
+        rows_html += (
+            f'<div class="leaderboard-row" style="background:{bg};border:{border};border-radius:4px;">'
+            f'<span style="min-width:28px;color:#888;">{medal.get(rank, f"#{rank}")}</span>'
+            f'<span style="min-width:20px;">{icon}</span>'
+            f'<span style="flex:1;color:{"#00FF41" if is_me else "#E8E8E8"};">'
+            f'{"<strong>" if is_me else ""}{row["username"]}{"</strong>" if is_me else ""}'
+            f'{"&nbsp;(you)" if is_me else ""}</span>'
+            f'{streak_html}'
+            f'<span style="color:#9D46FF;min-width:60px;text-align:right;">{row["xp"]} XP</span>'
+            f'<span style="color:#555;min-width:50px;text-align:right;">{row["levels"]}/5 lvl</span>'
+            f'</div>'
+        )
+
+    if not ranked:
+        rows_html = '<div style="color:#555;font-family:Space Mono,monospace;font-size:0.78rem;padding:1rem;">No adventurers yet. Be the first!</div>'
+
+    st.markdown(
+        f'<div class="card" style="padding:0.5rem;">{rows_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# BOSS BATTLE
+# ============================================================
+def render_boss_battle(level_id: int):
+    boss    = BOSS_BATTLES[level_id]
+    beaten  = level_id in st.session_state.get("boss_battles_done", set())
+    streak  = st.session_state.get("streak", 0)
+    bonus   = streak >= 2
+
     st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+    if beaten:
+        st.markdown(
+            f'<div class="success-box" style="text-align:center;">'
+            f'<div style="font-size:1.5rem;margin-bottom:0.3rem;">{boss["icon"]}</div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:0.85rem;">⚔️ {boss["title"]} DEFEATED</div>'
+            f'<div style="font-size:0.75rem;margin-top:0.3rem;color:#888;">You already claimed the boss XP reward.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
 
-    db          = get_db()
-    all_prog    = db.get("progress", {})
-    entries     = [
-        (u,
-         p.get("xp", 0),
-         len(p.get("completed_levels", [])),
-         len(p.get("boss_beaten", [])),
-         p.get("streak", 0))
-        for u, p in all_prog.items()
-    ]
-    entries.sort(key=lambda x: x[1], reverse=True)
+    xp_reward = int(boss["xp_reward"] * 1.2) if bonus else boss["xp_reward"]
+    bonus_html = f'<span style="color:#FFA000;"> (+20% streak bonus!)</span>' if bonus else ""
 
-    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-    me     = st.session_state.username
+    st.markdown(
+        f'<div class="boss-box">'
+        f'<div style="font-family:Space Mono,monospace;font-size:0.6rem;color:#FF6666;letter-spacing:0.3em;">⚔️ BOSS BATTLE</div>'
+        f'<div style="font-family:Space Mono,monospace;font-size:1.1rem;color:#fff;font-weight:700;margin:0.4rem 0;">'
+        f'{boss["icon"]} {boss["title"]}</div>'
+        f'<div style="color:#E8E8E8;font-size:0.85rem;margin-bottom:0.8rem;">{boss["flavor"]}</div>'
+        f'<div class="info-box" style="font-size:0.8rem;">💡 Hint: {boss["hint"]}</div>'
+        f'<div style="margin-top:0.6rem;font-family:Space Mono,monospace;font-size:0.72rem;color:#9D46FF;">'
+        f'Reward: <strong style="color:#00FF41">+{xp_reward} XP</strong>{bonus_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    if not entries:
-        st.markdown('<div class="info-box">No adventurers yet — be the first! 🚀</div>', unsafe_allow_html=True)
-    else:
-        for rank, (uname, xp, lvls, bosses, streak) in enumerate(entries[:10], 1):
-            medal     = medals[rank - 1] if rank <= len(medals) else f"#{rank}"
-            is_you    = uname == me
-            name_style = 'class="lb-you"' if is_you else ""
-            you_label  = ' <span style="color:#FFD700;font-size:0.68rem;">(YOU)</span>' if is_you else ""
-            flame      = f' <span style="color:#FF9000;">🔥{streak}</span>' if streak >= 2 else ""
-            boss_tag   = f' <span style="color:#FF4444;font-size:0.7rem;">💀×{bosses}</span>' if bosses else ""
+    attempt = st.text_input(
+        "Type your answer to defeat the boss:",
+        placeholder="e.g.  .append()",
+        key=f"boss_input_{level_id}",
+    )
+    if st.button(f"⚔️ Strike!", key=f"boss_submit_{level_id}"):
+        if attempt.strip() == boss["answer"]:
+            st.session_state.xp += xp_reward
+            if "boss_battles_done" not in st.session_state:
+                st.session_state.boss_battles_done = set()
+            st.session_state.boss_battles_done.add(level_id)
+            save_user_progress(st.session_state.username)
+            st.balloons()
             st.markdown(
-                f'<div class="lb-row" style="{"border-color:#FFD700;" if is_you else ""}">'
-                f'  <div class="lb-rank">{medal}</div>'
-                f'  <div class="lb-name" {name_style}>@{uname}{you_label}{flame}{boss_tag}</div>'
-                f'  <div style="color:#888;font-size:0.7rem;font-family:Space Mono,monospace;min-width:5rem;">{lvls}/5 levels</div>'
-                f'  <div class="lb-xp">{xp} XP</div>'
+                f'<div class="milestone">'
+                f'<div style="font-size:2.5rem;">{boss["icon"]}</div>'
+                f'<div style="font-family:Space Mono,monospace;color:#FF4444;font-size:0.9rem;margin:0.5rem 0;">BOSS DEFEATED!</div>'
+                f'<div style="color:#fff;font-size:0.82rem;">{boss["success_msg"]}</div>'
+                f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{xp_reward} XP earned 💾</span></div>'
                 f'</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True,
+            )
+            st.rerun()
+        else:
+            st.markdown(
+                '<div style="background:rgba(255,68,68,0.1);border-left:4px solid #FF4444;'
+                'border-radius:0 8px 8px 0;padding:0.7rem 1rem;color:#FF8888;font-family:Space Mono,monospace;font-size:0.8rem;">'
+                '💥 The boss deflects your attack! Check your spelling and try again.</div>',
+                unsafe_allow_html=True,
+            )
 
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-    if st.button("← Back to Hub"):
-        st.session_state.view = "hub"; st.rerun()
+
+# ============================================================
+# PRACTICE LAB  (right-column panel used in hub & level views)
+# ============================================================
+def render_practice_lab(default_code: str = ""):
+    """Render the Practice Lab: header → editor → run button → console."""
+    import html as _html
+
+    # ── 1. Header bar (pure HTML — self-contained, no unclosed divs) ──
+    st.markdown(
+        '<div class="lab-header">'
+        '<span class="lab-header-dot" style="background:#FF5F57;"></span>'
+        '<span class="lab-header-dot" style="background:#FEBC2E;"></span>'
+        '<span class="lab-header-dot" style="background:#28C840;"></span>'
+        '<span class="lab-title">⚗️ PRACTICE LAB</span>'
+        '<span class="lab-filename">main.py</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 2. Code editor ────────────────────────────────────────
+    if "sandbox_code" not in st.session_state:
+        st.session_state.sandbox_code = default_code or "# Start coding here!\nprint('Hello, World!')\n"
+
+    code_input = st.text_area(
+        "Python code",
+        value=st.session_state.sandbox_code,
+        height=300,
+        key="sandbox_code",
+        label_visibility="collapsed",
+        placeholder="# Write your Python here…\nprint('Hello, World!')",
+    )
+
+    # ── 3. Run button ─────────────────────────────────────────
+    run_clicked = st.button("▶  Run Code", use_container_width=True, key="run_sandbox_btn")
+
+    # ── 4. Console label + output (pure HTML — self-contained) ─
+    st.markdown('<div class="lab-console-label">▸ CONSOLE OUTPUT</div>', unsafe_allow_html=True)
+
+    if run_clicked:
+        stdout_cap, stderr_cap = io.StringIO(), io.StringIO()
+        try:
+            old_out, old_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = stdout_cap, stderr_cap
+            exec(compile(code_input, "<sandbox>", "exec"), {})
+            sys.stdout, sys.stderr = old_out, old_err
+            out = stdout_cap.getvalue()
+            err = stderr_cap.getvalue()
+            if not out and not err:
+                console_html = '<span class="lab-console-idle">(no output)</span>'
+            else:
+                console_html = _html.escape(out)
+                if err:
+                    console_html += f'<span class="lab-console-error">{_html.escape(err)}</span>'
+        except Exception as exc:
+            sys.stdout, sys.stderr = old_out, old_err
+            console_html = (
+                f'<span class="lab-console-error">'
+                f'{_html.escape(type(exc).__name__)}: {_html.escape(str(exc))}'
+                f'</span>'
+            )
+        st.session_state["_lab_last_output"] = console_html
+    else:
+        console_html = st.session_state.get("_lab_last_output", "")
+        if not console_html:
+            console_html = (
+                '<span class="lab-console-idle">'
+                '# Output will appear here after you click Run\n'
+                '# Try: print("Hello, World!")'
+                '</span>'
+            )
+
+    st.markdown(f'<div class="lab-console">{console_html}</div>', unsafe_allow_html=True)
 
 
 # ============================================================
 # HUB
 # ============================================================
 def render_hub():
-    streak = st.session_state.get("streak", 0)
-    # Streak welcome message
-    if streak >= 2:
+    col_main, col_lab = st.columns([3, 2], gap="large")
+
+    with col_main:
         st.markdown(
-            f'<div style="background:linear-gradient(90deg,rgba(255,100,0,0.15),transparent);'
-            f'border-left:4px solid #FF6400;border-radius:0 8px 8px 0;padding:0.7rem 1.2rem;margin-bottom:0.8rem;">'
-            f'🔥 <strong style="color:#FF9000;">{streak}-Day Streak Active!</strong> '
-            f'<span style="color:#888;font-size:0.82rem;">All XP gains are multiplied by 1.2× today.</span>'
-            f'</div>', unsafe_allow_html=True)
+            f'<h1 class="neon-heading" style="font-size:1.6rem;margin-bottom:0.2rem;">🐍 Python Coding Adventure</h1>'
+            f'<p style="color:#888;font-family:Space Mono,monospace;font-size:0.75rem;">'
+            f'Welcome back, <span style="color:#00FF41">@{st.session_state.username}</span> — choose your next mission!</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
 
-    st.markdown(
-        f'<h1 class="neon-heading" style="font-size:1.6rem;margin-bottom:0.2rem;">🐍 Python Coding Adventure</h1>'
-        f'<p style="color:#888;font-family:Space Mono,monospace;font-size:0.75rem;">'
-        f'Welcome back, <span style="color:#00FF41">@{st.session_state.username}</span> — choose your next mission!</p>',
-        unsafe_allow_html=True)
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+        # ── Mission cards in 2 columns inside the left pane ──
+        mission_cols = st.columns(2)
+        for i, (lvl_id, lvl) in enumerate(LEVELS.items()):
+            status = level_status(lvl_id)
+            with mission_cols[i % 2]:
+                border  = "#00FF41" if status=="done" else (lvl["color"] if status=="unlocked" else "#2A2A2A")
+                shadow  = f"4px 4px 0 {border}" if status!="locked" else "none"
+                opacity = "1" if status!="locked" else "0.4"
+                lbl_txt = "✅ COMPLETE" if status=="done" else ("▶ PLAY" if status=="unlocked" else "🔒 LOCKED")
+                lbl_col = "#00FF41" if status=="done" else ("#fff" if status=="unlocked" else "#555")
+                sc_html = ""
+                qs = st.session_state.quiz_state.get(lvl_id, {})
+                if qs.get("submitted"):
+                    sc = qs.get("score", 0)
+                    passed_icon = "✅" if sc >= PASS_THRESHOLD else "❌"
+                    sc_html = f'<div style="font-size:0.7rem;color:#888;margin-top:0.3rem;">{passed_icon} Score: {sc}/{QUESTIONS_PER_EXAM}</div>'
+                # Glowing neon border for unlocked/done
+                glow = f"box-shadow:{shadow},0 0 18px rgba(0,255,65,0.12);" if status=="done" else (f"box-shadow:{shadow};" if status!="locked" else "")
+                st.markdown(
+                    f'<div style="background:linear-gradient(160deg,#131313,#0F1A12);border:2px solid {border};'
+                    f'border-radius:10px;padding:1rem;{glow}text-align:center;margin-bottom:0.6rem;opacity:{opacity};">'
+                    f'<div style="font-size:2rem;margin-bottom:0.3rem;">{lvl["pixel_art"]}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.58rem;color:{border};letter-spacing:0.2em;">LEVEL {lvl_id}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.78rem;color:#fff;font-weight:700;margin:0.25rem 0;">{lvl["icon"]} {lvl["title"]}</div>'
+                    f'<div style="font-size:0.68rem;color:#888;margin-bottom:0.5rem;">{lvl["subtitle"]}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.6rem;color:{lbl_col};">{lbl_txt}</div>'
+                    f'{sc_html}</div>',
+                    unsafe_allow_html=True,
+                )
+                if status != "locked":
+                    btn = "Review Level" if status=="done" else "Start Level"
+                    if st.button(btn, key=f"hub_{lvl_id}", use_container_width=True):
+                        st.session_state.view = "level"
+                        st.session_state.current_level = lvl_id
+                        st.rerun()
 
-    cols = st.columns(3)
-    for i, (lvl_id, lvl) in enumerate(LEVELS.items()):
-        status = level_status(lvl_id)
-        with cols[i % 3]:
-            border  = "#00FF41" if status=="done" else (lvl["color"] if status=="unlocked" else "#2A2A2A")
-            shadow  = f"4px 4px 0 {border}" if status != "locked" else "none"
-            opacity = "1" if status != "locked" else "0.4"
-            lbl_txt = "✅ COMPLETE" if status=="done" else ("▶ PLAY" if status=="unlocked" else "🔒 LOCKED")
-            lbl_col = "#00FF41" if status=="done" else ("#fff" if status=="unlocked" else "#555")
-            sc_html = ""
-            qs = st.session_state.quiz_state.get(lvl_id, {})
-            if qs.get("submitted"):
-                sc          = qs.get("score", 0)
-                passed_icon = "✅" if sc >= PASS_THRESHOLD else "❌"
-                sc_html     = f'<div style="font-size:0.7rem;color:#888;margin-top:0.3rem;">{passed_icon} Score: {sc}/{QUESTIONS_PER_EXAM}</div>'
-            boss_html = ""
-            if lvl_id in st.session_state.get("boss_beaten", set()):
-                boss_html = '<div style="font-size:0.68rem;color:#FF4444;margin-top:0.2rem;">💀 Boss Beaten</div>'
-            st.markdown(
-                f'<div style="background:#181818;border:2px solid {border};border-radius:8px;padding:1.2rem;'
-                f'box-shadow:{shadow};text-align:center;margin-bottom:0.6rem;opacity:{opacity};">'
-                f'<div style="font-size:2.2rem;margin-bottom:0.4rem;">{lvl["pixel_art"]}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{border};letter-spacing:0.2em;">LEVEL {lvl_id}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:#fff;font-weight:700;margin:0.3rem 0;">{lvl["icon"]} {lvl["title"]}</div>'
-                f'<div style="font-size:0.72rem;color:#888;margin-bottom:0.6rem;">{lvl["subtitle"]}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lbl_col};">{lbl_txt}</div>'
-                f'{sc_html}{boss_html}</div>',
-                unsafe_allow_html=True)
-            if status != "locked":
-                btn = "Review Level" if status == "done" else "Start Level"
-                if st.button(btn, key=f"hub_{lvl_id}", use_container_width=True):
-                    st.session_state.view = "level"
-                    st.session_state.current_level = lvl_id
-                    st.rerun()
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+        xp = st.session_state.xp
+        title, icon = get_character_info(xp)
+        max_xp = sum(v["xp_reward"] for v in LEVELS.values())
+        done   = len(st.session_state.completed_levels)
+        stars  = sum(
+            st.session_state.quiz_state.get(l, {}).get("score", 0)
+            for l in st.session_state.completed_levels
+        )
 
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-    xp     = st.session_state.xp
-    title, icon = get_character_info(xp)
-    max_xp = sum(v["xp_reward"] for v in LEVELS.values())
-    done   = len(st.session_state.completed_levels)
-    stars  = sum(st.session_state.quiz_state.get(l, {}).get("score", 0)
-                 for l in st.session_state.completed_levels)
-    bosses = len(st.session_state.get("boss_beaten", set()))
+        for stat_col, val, label, sub, color in zip(
+            st.columns(4),
+            [f"{icon} {title}", str(xp), f"{done}/5", f"{stars}⭐"],
+            ["Rank", "XP Earned", "Levels Done", "Stars"],
+            ["Character class", f"of {max_xp} total", "Keep going!", "quiz correct"],
+            ["#00FF41", "#9D46FF", "#00CFFF", "#FF6B6B"],
+        ):
+            with stat_col:
+                st.markdown(
+                    f'<div class="card" style="text-align:center;padding:1rem;">'
+                    f'<div style="font-family:Space Mono,monospace;font-size:1.2rem;color:#fff;">{val}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.72rem;color:{color};">{label}</div>'
+                    f'<div style="font-size:0.68rem;color:#888;">{sub}</div></div>',
+                    unsafe_allow_html=True,
+                )
 
-    for col, val, label, sub, color in zip(
-        st.columns(5),
-        [f"{icon} {title}", str(xp), f"{done}/5", f"{stars}⭐", f"💀 {bosses}/5"],
-        ["Rank", "XP Earned", "Levels Done", "Stars", "Bosses"],
-        ["Character class", f"of {max_xp} total", "Keep going!", "quiz correct", "defeated"],
-        ["#00FF41", "#9D46FF", "#00CFFF", "#FF6B6B", "#FF4444"],
-    ):
-        with col:
-            st.markdown(
-                f'<div class="card" style="text-align:center;padding:1rem;">'
-                f'<div style="font-family:Space Mono,monospace;font-size:1.1rem;color:#fff;">{val}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.72rem;color:{color};">{label}</div>'
-                f'<div style="font-size:0.68rem;color:#888;">{sub}</div></div>',
-                unsafe_allow_html=True)
+        render_leaderboard()
 
-
-# ============================================================
-# BOSS BATTLE
-# ============================================================
-def render_boss_battle(level_id: int, lvl: dict):
-    boss   = lvl.get("boss")
-    if not boss:
-        st.markdown('<div class="info-box">No boss for this level yet.</div>', unsafe_allow_html=True)
-        return
-
-    beaten = level_id in st.session_state.get("boss_beaten", set())
-    mult   = streak_multiplier()
-    bonus  = int(boss["xp_reward"] * mult)
-    streak = st.session_state.get("streak", 0)
-
-    if beaten:
-        st.markdown(
-            f'<div class="boss-beaten">'
-            f'💀 {boss["name"]} HAS BEEN DEFEATED!<br/>'
-            f'<span style="font-size:0.78rem;color:#9D46FF;">+{bonus} XP claimed</span>'
-            f'</div>', unsafe_allow_html=True)
-        return
-
-    # ── Boss card ──
-    streak_note = f' <span style="color:#FF9000;font-size:0.75rem;">(🔥 streak bonus: ×{mult:.1f}!)</span>' if streak >= 2 else ""
-    st.markdown(
-        f'<div class="boss-card">'
-        f'<div class="boss-title">⚔️ BOSS BATTLE: {boss["name"]}</div>'
-        f'<p style="color:#ccc;font-size:0.85rem;margin:0 0 1rem;">{boss["lore"]}</p>'
-        f'<p style="color:#FF9090;font-family:Space Mono,monospace;font-size:0.82rem;line-height:1.6;">'
-        f'{boss["challenge"]}</p>'
-        f'<p style="color:#555;font-size:0.78rem;font-style:italic;margin-top:0.5rem;">💡 Hint: {boss["hint"]}</p>'
-        f'<p style="color:#9D46FF;font-family:Space Mono,monospace;font-size:0.78rem;margin-top:0.5rem;">'
-        f'Reward: <strong>+{bonus} XP</strong>{streak_note}</p>'
-        f'</div>', unsafe_allow_html=True)
-
-    answer_input = st.text_input(
-        "Your answer:", key=f"boss_input_{level_id}",
-        placeholder="Type your answer exactly…",
-    )
-
-    if st.button("⚔️ Deliver the Final Blow!", key=f"boss_submit_{level_id}"):
-        cleaned = answer_input.strip().lower().replace('"', "'")
-        correct = any(cleaned == a.strip().lower() for a in boss["accepted"])
-        if correct:
-            st.session_state.xp += bonus
-            if "boss_beaten" not in st.session_state or not isinstance(st.session_state.boss_beaten, set):
-                st.session_state.boss_beaten = set()
-            st.session_state.boss_beaten.add(level_id)
-            save_user_progress(st.session_state.username)
-            st.balloons()
-            st.rerun()
-        else:
-            st.markdown(
-                f'<div style="background:rgba(255,68,68,0.08);border-left:4px solid #FF4444;'
-                f'border-radius:0 8px 8px 0;padding:0.7rem 1rem;margin:0.4rem 0;color:#FF8888;">'
-                f'❌ Not quite — read the hint and try again!</div>',
-                unsafe_allow_html=True)
+    with col_lab:
+        render_practice_lab()
 
 
 # ============================================================
@@ -1890,42 +2359,63 @@ def render_boss_battle(level_id: int, lvl: dict):
 # ============================================================
 def render_level(level_id):
     lvl = LEVELS[level_id]
-    if st.button("← Back to Hub"):
-        st.session_state.view = "hub"; st.rerun()
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
-        f'<div style="font-size:3rem;background:#111;border:2px solid #2A2A2A;border-radius:8px;'
-        f'padding:0.3rem 0.8rem;box-shadow:3px 3px 0 #000;">{lvl["pixel_art"]}</div>'
-        f'<div>'
-        f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lvl["color"]};letter-spacing:0.25em;">LEVEL {level_id}</div>'
-        f'<div style="font-family:Space Mono,monospace;font-size:1.3rem;color:#fff;font-weight:700;">{lvl["icon"]} {lvl["title"]}</div>'
-        f'<div style="font-size:0.82rem;color:#888;">{lvl["subtitle"]}</div>'
-        f'</div></div>',
-        unsafe_allow_html=True)
-    if not is_level_unlocked(level_id):
-        st.markdown(f'<div class="locked-box">🔒 Complete Level {level_id-1} first.</div>',
-                    unsafe_allow_html=True)
-        return
+    col_main, col_lab = st.columns([3, 2], gap="large")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)", "💀 Boss Battle"])
-    with tab1:
-        st.markdown(lvl["description"], unsafe_allow_html=False)
-        mult = streak_multiplier()
-        bonus_note = f" <em style='color:#FF9000;'>🔥 Streak active — XP ×{mult:.1f}!</em>" if mult > 1 else ""
+    with col_main:
+        if st.button("← Back to Hub"):
+            st.session_state.view = "hub"
+            st.rerun()
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
         st.markdown(
-            f'<div class="info-box">💡 Complete the quiz to earn '
-            f'<strong style="color:#00FF41">+{int(lvl["xp_reward"]*mult)} XP</strong>'
-            f' — Pass mark: <strong>6/10 (60%)</strong>{bonus_note}</div>',
-            unsafe_allow_html=True)
-    with tab2:
-        st.markdown('<p style="color:#888;font-size:0.8rem;font-family:Space Mono,monospace;">// Study this before the quiz</p>',
-                    unsafe_allow_html=True)
-        st.code(lvl["code_example"], language="python")
-    with tab3:
-        render_quiz(level_id, lvl)
-    with tab4:
-        render_boss_battle(level_id, lvl)
+            f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
+            f'<div style="font-size:3rem;background:#111;border:2px solid #2A2A2A;border-radius:8px;'
+            f'padding:0.3rem 0.8rem;box-shadow:3px 3px 0 #000;">{lvl["pixel_art"]}</div>'
+            f'<div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lvl["color"]};'
+            f'letter-spacing:0.25em;">LEVEL {level_id}</div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:1.3rem;color:#fff;font-weight:700;">'
+            f'{lvl["icon"]} {lvl["title"]}</div>'
+            f'<div style="font-size:0.82rem;color:#888;">{lvl["subtitle"]}</div>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+        if not is_level_unlocked(level_id):
+            st.markdown(f'<div class="locked-box">🔒 Complete Level {level_id-1} first.</div>', unsafe_allow_html=True)
+            with col_lab:
+                render_practice_lab()
+            return
+
+        quiz_passed = level_id in st.session_state.completed_levels
+        boss        = BOSS_BATTLES.get(level_id)
+        boss_beaten = level_id in st.session_state.get("boss_battles_done", set())
+
+        boss_label = "⚔️ Boss Battle ✅" if boss_beaten else ("⚔️ Boss Battle 🔓" if quiz_passed else "⚔️ Boss Battle 🔒")
+
+        tab1, tab2, tab3, tab4 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)", boss_label])
+        with tab1:
+            st.markdown(lvl["description"], unsafe_allow_html=False)
+            st.markdown(f'<div class="info-box">💡 Complete the quiz to earn <strong style="color:#00FF41">+{lvl["xp_reward"]} XP</strong> — Pass mark: <strong>6/10 (60%)</strong></div>', unsafe_allow_html=True)
+        with tab2:
+            st.markdown('<p style="color:#888;font-size:0.8rem;font-family:Space Mono,monospace;">// Study this before the quiz</p>', unsafe_allow_html=True)
+            st.code(lvl["code_example"], language="python")
+        with tab3:
+            render_quiz(level_id, lvl)
+        with tab4:
+            if not quiz_passed:
+                st.markdown(
+                    '<div class="locked-box">🔒 Pass the quiz first to unlock the Boss Battle and earn bonus XP!</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                render_boss_battle(level_id)
+
+    with col_lab:
+        # Pre-seed the lab with the level's code example on first visit to this level
+        lab_key = f"_lab_seeded_{level_id}"
+        if lab_key not in st.session_state:
+            st.session_state.sandbox_code = lvl["code_example"]
+            st.session_state[lab_key] = True
+        render_practice_lab(default_code=lvl["code_example"])
 
 
 # ============================================================
@@ -1937,19 +2427,22 @@ def render_quiz(level_id, lvl):
     passed    = level_id in st.session_state.completed_levels
     submitted = qs_data.get("submitted", False)
     score     = qs_data.get("score", 0)
-    mult      = streak_multiplier()
 
     # ── Milestone badge ──
     if st.session_state.show_badge == level_id:
         st.balloons()
-        xp_gained = int(lvl["xp_reward"] * mult)
+        xp_earned   = qs_data.get("xp_earned", lvl["xp_reward"])
+        streak       = st.session_state.get("streak", 0)
+        bonus_html   = ' <span style="color:#FFA000;font-size:0.75rem;">(🔥 streak bonus!)</span>' if streak >= 2 else ""
         st.markdown(
             f'<div class="milestone">'
             f'<div style="font-size:3rem;">🏆</div>'
             f'<div style="font-family:Space Mono,monospace;color:#00FF41;font-size:1rem;margin:0.5rem 0;">MILESTONE UNLOCKED!</div>'
             f'<div style="color:#fff;">{lvl["subtitle"]} Complete — Score: {score}/{QUESTIONS_PER_EXAM}</div>'
-            f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{xp_gained} XP saved 💾</span></div>'
-            f'</div>', unsafe_allow_html=True)
+            f'<div style="margin-top:0.8rem;"><span class="xp-badge">+{xp_earned} XP saved 💾</span>{bonus_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         st.session_state.show_badge = None
 
     # ── Result banner ──
@@ -1958,21 +2451,23 @@ def render_quiz(level_id, lvl):
         if passed:
             st.markdown(
                 f'<div class="success-box">✅ Level PASSED! Score: {score}/{QUESTIONS_PER_EXAM} ({pct}%) — '
-                f'Progress saved 💾</div>', unsafe_allow_html=True)
+                f'Progress saved 💾</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.markdown(
                 f'<div style="background:rgba(255,68,68,0.10);border-left:4px solid #FF4444;'
                 f'border-radius:0 8px 8px 0;padding:0.9rem 1.2rem;margin:0.8rem 0;color:#FF8888;">'
                 f'❌ Score: {score}/{QUESTIONS_PER_EXAM} ({pct}%) — Need 6/10 to pass. Try again!</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True,
+            )
 
-    streak_note = f" 🔥 Streak ×{mult:.1f} bonus active!" if mult > 1 else ""
     st.markdown(
         f'<p style="font-family:Space Mono,monospace;font-size:0.78rem;color:#888;margin-bottom:1rem;">'
-        f'Answer all {QUESTIONS_PER_EXAM} questions, then submit. '
-        f'Pass mark: {PASS_THRESHOLD}/{QUESTIONS_PER_EXAM} (60%) — '
-        f'Randomly selected from a bank of {QUESTIONS_IN_BANK}.{streak_note}</p>',
-        unsafe_allow_html=True)
+        f'Answer all {QUESTIONS_PER_EXAM} questions, then submit. Pass mark: {PASS_THRESHOLD}/{QUESTIONS_PER_EXAM} (60%)'
+        f' — Questions are randomly selected from a bank of {QUESTIONS_IN_BANK}.</p>',
+        unsafe_allow_html=True,
+    )
 
     saved_answers = qs_data.get("answers", [None] * QUESTIONS_PER_EXAM)
     user_answers  = []
@@ -1982,8 +2477,9 @@ def render_quiz(level_id, lvl):
             f'<div class="card" style="margin-bottom:0.6rem;">'
             f'<p style="font-family:Space Mono,monospace;font-size:0.82rem;color:#fff;margin:0 0 0.8rem;">'
             f'Q{i+1}/{QUESTIONS_PER_EXAM}: {q["q"]}</p></div>',
-            unsafe_allow_html=True)
-        saved_val   = saved_answers[i] if i < len(saved_answers) else None
+            unsafe_allow_html=True,
+        )
+        saved_val = saved_answers[i] if i < len(saved_answers) else None
         default_idx = q["options"].index(saved_val) if saved_val in q["options"] else 0
         disabled    = submitted and passed
         choice = st.radio(
@@ -1993,46 +2489,48 @@ def render_quiz(level_id, lvl):
         user_answers.append(choice)
         if submitted:
             if choice == q["answer"]:
-                st.markdown(f'<div class="success-box">✅ Correct! <code>{q["answer"]}</code></div>',
-                            unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box">✅ Correct! <code>{q["answer"]}</code></div>', unsafe_allow_html=True)
             else:
                 st.markdown(
                     f'<div style="background:rgba(255,68,68,0.08);border-left:4px solid #FF4444;'
                     f'border-radius:0 8px 8px 0;padding:0.7rem 1rem;margin:0.4rem 0;color:#FF8888;">'
                     f'❌ Yours: <code>{choice}</code> — Correct: <code>{q["answer"]}</code></div>',
-                    unsafe_allow_html=True)
+                    unsafe_allow_html=True,
+                )
         st.markdown("")
 
-    # ── Submit / Retry ──
+    # ── Submit / Retry buttons ──
     if submitted and not passed:
         st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-        st.markdown('<p style="color:#FF8888;font-family:Space Mono,monospace;font-size:0.8rem;">'
-                    'You need 6/10 to pass. New random questions will be generated on retry.</p>',
-                    unsafe_allow_html=True)
+        st.markdown('<p style="color:#FF8888;font-family:Space Mono,monospace;font-size:0.8rem;">You need 6/10 to pass. New random questions will be generated on retry.</p>', unsafe_allow_html=True)
         if st.button("🔄 Retry Quiz", key=f"retry_{level_id}"):
+            # Clear this level's quiz state so new questions are drawn
             st.session_state.quiz_state.pop(level_id, None)
             save_user_progress(st.session_state.username)
             st.rerun()
 
     if not submitted:
         if st.button("⚡ Submit Answers", key=f"submit_{level_id}"):
-            new_score  = sum(1 for i, q in enumerate(questions) if user_answers[i] == q["answer"])
+            new_score = sum(1 for i, q in enumerate(questions) if user_answers[i] == q["answer"])
             new_passed = new_score >= PASS_THRESHOLD
 
             current = st.session_state.quiz_state.get(level_id, {})
             current.update({
-                "answers":  user_answers,
+                "answers":   user_answers,
                 "submitted": True,
-                "score":    new_score,
-                "indices":  current.get("indices", []),
+                "score":     new_score,
+                "indices":   current.get("indices", []),
             })
             st.session_state.quiz_state[level_id] = current
 
             if new_passed and level_id not in st.session_state.completed_levels:
-                xp_gain = int(lvl["xp_reward"] * mult)
-                st.session_state.xp += xp_gain
+                streak     = st.session_state.get("streak", 0)
+                xp_earned  = int(lvl["xp_reward"] * 1.2) if streak >= 2 else lvl["xp_reward"]
+                st.session_state.xp += xp_earned
                 st.session_state.completed_levels.add(level_id)
                 st.session_state.show_badge = level_id
+                # Store actual XP awarded so badge can display it
+                current["xp_earned"] = xp_earned
 
             save_user_progress(st.session_state.username)
             st.rerun()
@@ -2049,7 +2547,8 @@ def render_certificate():
     st.markdown(
         '<div style="font-family:Space Mono,monospace;font-size:1rem;color:#00FF41;margin-bottom:0.4rem;">🏅 Certificate of Completion</div>'
         '<p style="color:#888;font-size:0.85rem;">All 5 levels conquered! Enter your name to generate your certificate.</p>',
-        unsafe_allow_html=True)
+        unsafe_allow_html=True,
+    )
     name_input = st.text_input("Your Name for the Certificate",
                                value=st.session_state.cert_name, placeholder="Enter your full name…")
     if name_input != st.session_state.cert_name:
@@ -2058,11 +2557,9 @@ def render_certificate():
 
     if name_input.strip():
         title, icon = get_character_info(st.session_state.xp)
-        done     = len(st.session_state.completed_levels)
-        xp       = st.session_state.xp
-        max_xp   = sum(v["xp_reward"] for v in LEVELS.values())
-        bosses   = len(st.session_state.get("boss_beaten", set()))
-        streak   = st.session_state.get("streak", 0)
+        done    = len(st.session_state.completed_levels)
+        xp      = st.session_state.xp
+        max_xp  = sum(v["xp_reward"] for v in LEVELS.values())
         date_str = datetime.now().strftime("%B %d, %Y")
         cert_html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <title>Python Coding Adventure — Certificate</title>
@@ -2077,11 +2574,11 @@ body{{margin:0;padding:2rem;background:#0D0D0D;display:flex;justify-content:cent
 hr{{border:none;border-top:1px solid #2A2A2A;margin:1.5rem 0;}}
 .label{{font-size:0.8rem;color:#666;text-transform:uppercase;letter-spacing:0.15em;}}
 .hero{{font-family:'Space Mono',monospace;font-size:2.5rem;color:#fff;margin:0.3rem 0 1.5rem;}}
-.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin:1.5rem 0;}}
+.grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin:1.5rem 0;}}
 .stat{{background:#1A1A1A;border:1px solid #2A2A2A;border-radius:8px;padding:1rem;}}
-.stat .v{{font-family:'Space Mono',monospace;font-size:1.2rem;color:#00FF41;}}
+.stat .v{{font-family:'Space Mono',monospace;font-size:1.4rem;color:#00FF41;}}
 .stat .l{{font-size:0.75rem;color:#666;margin-top:0.2rem;}}
-.badge{{display:inline-block;background:#6200EE;border:2px solid #000;border-radius:6px;padding:0.4rem 1.2rem;font-family:'Space Mono',monospace;font-size:0.8rem;color:#fff;box-shadow:3px 3px 0 #000;margin:0.3rem;}}
+.badge{{display:inline-block;background:#6200EE;border:2px solid #000;border-radius:6px;padding:0.4rem 1.2rem;font-family:'Space Mono',monospace;font-size:0.8rem;color:#fff;box-shadow:3px 3px 0 #000;margin-top:1rem;}}
 .footer{{margin-top:2rem;font-size:0.72rem;color:#555;font-family:'Space Mono',monospace;}}
 </style></head><body>
 <div class="cert">
@@ -2093,13 +2590,11 @@ hr{{border:none;border-top:1px solid #2A2A2A;margin:1.5rem 0;}}
   <div class="hero">{name_input.strip()}</div>
   <div class="grid">
     <div class="stat"><div class="v">{xp}/{max_xp}</div><div class="l">XP Earned</div></div>
-    <div class="stat"><div class="v">{done}/5</div><div class="l">Levels Done</div></div>
-    <div class="stat"><div class="v">💀 {bosses}/5</div><div class="l">Bosses Beaten</div></div>
-    <div class="stat"><div class="v">🔥 {streak}</div><div class="l">Day Streak</div></div>
+    <div class="stat"><div class="v">{done}/5</div><div class="l">Levels Completed</div></div>
+    <div class="stat"><div class="v">{icon} {title}</div><div class="l">Final Rank</div></div>
   </div>
   <hr/>
-  <span class="badge">✅ Python Basics Mastered</span>
-  <span class="badge">🎯 60% Pass Standard</span>
+  <div class="badge">✅ Python Basics Mastered — 60% Pass Standard</div>
   <div class="footer">Issued on {date_str} &nbsp;|&nbsp; Python Coding Adventure &nbsp;|&nbsp; Powered by Streamlit</div>
 </div></body></html>"""
         b64   = base64.b64encode(cert_html.encode()).decode()
@@ -2109,10 +2604,10 @@ hr{{border:none;border-top:1px solid #2A2A2A;margin:1.5rem 0;}}
             f'<div style="display:inline-block;background:#00FF41;color:#000;font-family:Space Mono,monospace;'
             f'font-weight:700;border:2px solid #000;border-radius:8px;box-shadow:4px 4px 0 #000;'
             f'padding:0.6rem 1.4rem;cursor:pointer;margin-top:0.5rem;">📥 Download Certificate</div></a>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True,
+        )
     else:
-        st.markdown('<div style="color:#666;font-size:0.82rem;font-style:italic;">↑ Enter your name to unlock the download.</div>',
-                    unsafe_allow_html=True)
+        st.markdown('<div style="color:#666;font-size:0.82rem;font-style:italic;">↑ Enter your name to unlock the download.</div>', unsafe_allow_html=True)
 
 
 # ============================================================
@@ -2132,10 +2627,7 @@ def main():
         render_hub()
     elif st.session_state.view == "level":
         render_level(st.session_state.current_level)
-    elif st.session_state.view == "leaderboard":
-        render_leaderboard()
 
 
 if __name__ == "__main__":
     main()
-
