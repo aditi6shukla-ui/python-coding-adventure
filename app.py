@@ -159,6 +159,121 @@ CUSTOM_CSS = """
   .pass-badge { color:#00FF41; font-family:'Space Mono',monospace; font-size:0.8rem; }
   .fail-badge { color:#FF4444; font-family:'Space Mono',monospace; font-size:0.8rem; }
 
+  /* ── Practice Lab Panel ── */
+  .lab-panel {
+    background: #0C0C0C;
+    border: 1.5px solid #1E3A2F;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,255,65,0.08), 6px 6px 0 #000;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 600px;
+  }
+  .lab-header {
+    background: linear-gradient(135deg, #0D1F17, #111A14);
+    border-bottom: 1.5px solid #1E3A2F;
+    padding: 0.75rem 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .lab-header-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block;
+  }
+  .lab-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: #00FF41;
+    letter-spacing: 0.18em;
+    text-shadow: 0 0 8px rgba(0,255,65,0.5);
+    margin-left: 0.3rem;
+  }
+  .lab-filename {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: #3A5A47;
+    margin-left: auto;
+  }
+  .lab-editor-wrap {
+    padding: 0.6rem 0.8rem 0 0.8rem;
+    flex: 1;
+  }
+  .lab-editor-wrap .stTextArea textarea {
+    background: #080E0A !important;
+    border: 1.5px solid #1A3028 !important;
+    border-radius: 8px !important;
+    color: #A8FFB8 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-size: 0.82rem !important;
+    line-height: 1.6 !important;
+    caret-color: #00FF41;
+    resize: none !important;
+  }
+  .lab-editor-wrap .stTextArea textarea:focus {
+    border-color: #00FF41 !important;
+    box-shadow: 0 0 0 2px rgba(0,255,65,0.15) !important;
+  }
+  .lab-editor-wrap .stTextArea label { display: none !important; }
+  .lab-run-wrap {
+    padding: 0.6rem 0.8rem;
+  }
+  .lab-run-wrap .stButton > button {
+    background: linear-gradient(135deg, #00C936, #00FF41) !important;
+    color: #000 !important;
+    font-family: 'Space Mono', monospace !important;
+    font-weight: 700 !important;
+    font-size: 0.88rem !important;
+    letter-spacing: 0.1em !important;
+    border: 2px solid #000 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 0 16px rgba(0,255,65,0.35), 3px 3px 0 #000 !important;
+    padding: 0.65rem !important;
+    width: 100% !important;
+    transition: all 0.1s ease !important;
+  }
+  .lab-run-wrap .stButton > button:hover {
+    transform: translate(-1px,-1px) !important;
+    box-shadow: 0 0 24px rgba(0,255,65,0.5), 5px 5px 0 #000 !important;
+  }
+  .lab-console-wrap {
+    padding: 0 0.8rem 0.8rem 0.8rem;
+  }
+  .lab-console-header {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    color: #2A5C40;
+    letter-spacing: 0.2em;
+    margin-bottom: 0.35rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .lab-console {
+    background: #060D09;
+    border: 1px solid #132B1E;
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78rem;
+    color: #00FF41;
+    white-space: pre-wrap;
+    word-break: break-all;
+    min-height: 90px;
+    max-height: 180px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+  .lab-console-idle {
+    color: #1E4030;
+    font-style: italic;
+  }
+  .lab-console-error {
+    color: #FF6666;
+  }
+
   .boss-box {
     background: linear-gradient(135deg, rgba(255,68,68,0.15), rgba(255,100,0,0.1));
     border: 2px solid #FF4444; border-radius: var(--radius); padding: 1.5rem;
@@ -1894,44 +2009,7 @@ def render_sidebar():
                 unsafe_allow_html=True,
             )
 
-        # ── Practice Lab ──
-        st.markdown("---")
-        st.markdown('<p style="font-family:Space Mono,monospace;font-size:0.7rem;color:#666;margin-bottom:0.4rem;">⚗️ PRACTICE LAB</p>', unsafe_allow_html=True)
-        code_input = st.text_area(
-            "Write Python code:",
-            height=140,
-            placeholder="print('Hello, Adventurer!')",
-            key="sandbox_code",
-            label_visibility="collapsed",
-        )
-        if st.button("▶ Run Code", use_container_width=True, key="run_sandbox"):
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            try:
-                old_stdout = sys.stdout
-                old_stderr = sys.stderr
-                sys.stdout = stdout_capture
-                sys.stderr = stderr_capture
-                exec(compile(code_input, "<sandbox>", "exec"), {})  # isolated namespace
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
-                output = stdout_capture.getvalue()
-                err    = stderr_capture.getvalue()
-                if output or err:
-                    err_html = f'<span class="error-output">{err}</span>' if err else ""
-                    st.markdown(
-                        f'<div class="output-box">{output}{err_html}</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown('<div class="output-box" style="color:#555;">(no output)</div>', unsafe_allow_html=True)
-            except Exception as e:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
-                st.markdown(
-                    f'<div class="output-box"><span class="error-output">{type(e).__name__}: {e}</span></div>',
-                    unsafe_allow_html=True,
-                )
+
 
 
 # ============================================================
@@ -2098,77 +2176,173 @@ def render_boss_battle(level_id: int):
 
 
 # ============================================================
+# PRACTICE LAB  (right-column panel used in hub & level views)
+# ============================================================
+def render_practice_lab(default_code: str = ""):
+    """Render the full-height Practice Lab sidebar panel."""
+
+    # ── Panel header ──────────────────────────────────────────
+    st.markdown(
+        '<div class="lab-panel">'
+        '<div class="lab-header">'
+        '<span class="lab-header-dot" style="background:#FF5F57;"></span>'
+        '<span class="lab-header-dot" style="background:#FEBC2E;"></span>'
+        '<span class="lab-header-dot" style="background:#28C840;"></span>'
+        '<span class="lab-title">⚗️ PRACTICE LAB</span>'
+        '<span class="lab-filename">main.py</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Editor ────────────────────────────────────────────────
+    st.markdown('<div class="lab-editor-wrap">', unsafe_allow_html=True)
+    if "sandbox_code" not in st.session_state:
+        st.session_state.sandbox_code = default_code or "# Start coding here!\nprint('Hello, World!')\n"
+
+    code_input = st.text_area(
+        "code",
+        value=st.session_state.sandbox_code,
+        height=320,
+        key="sandbox_code",
+        label_visibility="hidden",
+        placeholder="# Write your Python here…\nprint('Hello, World!')",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Run button ────────────────────────────────────────────
+    st.markdown('<div class="lab-run-wrap">', unsafe_allow_html=True)
+    run_clicked = st.button("▶  Run Code", use_container_width=True, key="run_sandbox_btn")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Console output ────────────────────────────────────────
+    st.markdown(
+        '<div class="lab-console-wrap">'
+        '<div class="lab-console-header">▸ CONSOLE OUTPUT</div>',
+        unsafe_allow_html=True,
+    )
+
+    if run_clicked:
+        stdout_cap = io.StringIO()
+        stderr_cap = io.StringIO()
+        try:
+            old_out, old_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = stdout_cap, stderr_cap
+            exec(compile(code_input, "<sandbox>", "exec"), {})
+            sys.stdout, sys.stderr = old_out, old_err
+            out = stdout_cap.getvalue()
+            err = stderr_cap.getvalue()
+            if not out and not err:
+                st.markdown('<div class="lab-console"><span class="lab-console-idle">(no output)</span></div>', unsafe_allow_html=True)
+            else:
+                err_part = f'<span class="lab-console-error">{err}</span>' if err else ""
+                import html as _html
+                safe_out = _html.escape(out)
+                st.markdown(f'<div class="lab-console">{safe_out}{err_part}</div>', unsafe_allow_html=True)
+        except Exception as exc:
+            sys.stdout, sys.stderr = old_out, old_err
+            import html as _html
+            st.markdown(
+                f'<div class="lab-console"><span class="lab-console-error">'
+                f'{_html.escape(type(exc).__name__)}: {_html.escape(str(exc))}'
+                f'</span></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        output_hist = st.session_state.get("_lab_last_output", "")
+        if output_hist:
+            st.markdown(f'<div class="lab-console">{output_hist}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="lab-console"><span class="lab-console-idle">'
+                '# Output will appear here…\n# Try: print("Hello, World!")'
+                '</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)  # close console-wrap
+
+
+# ============================================================
 # HUB
 # ============================================================
 def render_hub():
-    st.markdown(
-        f'<h1 class="neon-heading" style="font-size:1.6rem;margin-bottom:0.2rem;">🐍 Python Coding Adventure</h1>'
-        f'<p style="color:#888;font-family:Space Mono,monospace;font-size:0.75rem;">'
-        f'Welcome back, <span style="color:#00FF41">@{st.session_state.username}</span> — choose your next mission!</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+    col_main, col_lab = st.columns([3, 2], gap="large")
 
-    cols = st.columns(3)
-    for i, (lvl_id, lvl) in enumerate(LEVELS.items()):
-        status = level_status(lvl_id)
-        with cols[i % 3]:
-            border  = "#00FF41" if status=="done" else (lvl["color"] if status=="unlocked" else "#2A2A2A")
-            shadow  = f"4px 4px 0 {border}" if status!="locked" else "none"
-            opacity = "1" if status!="locked" else "0.4"
-            lbl_txt = "✅ COMPLETE" if status=="done" else ("▶ PLAY" if status=="unlocked" else "🔒 LOCKED")
-            lbl_col = "#00FF41" if status=="done" else ("#fff" if status=="unlocked" else "#555")
-            sc_html = ""
-            qs = st.session_state.quiz_state.get(lvl_id, {})
-            if qs.get("submitted"):
-                sc = qs.get("score", 0)
-                passed_icon = "✅" if sc >= PASS_THRESHOLD else "❌"
-                sc_html = f'<div style="font-size:0.7rem;color:#888;margin-top:0.3rem;">{passed_icon} Score: {sc}/{QUESTIONS_PER_EXAM}</div>'
-            st.markdown(
-                f'<div style="background:#181818;border:2px solid {border};border-radius:8px;padding:1.2rem;'
-                f'box-shadow:{shadow};text-align:center;margin-bottom:0.6rem;opacity:{opacity};">'
-                f'<div style="font-size:2.2rem;margin-bottom:0.4rem;">{lvl["pixel_art"]}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{border};letter-spacing:0.2em;">LEVEL {lvl_id}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:#fff;font-weight:700;margin:0.3rem 0;">{lvl["icon"]} {lvl["title"]}</div>'
-                f'<div style="font-size:0.72rem;color:#888;margin-bottom:0.6rem;">{lvl["subtitle"]}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lbl_col};">{lbl_txt}</div>'
-                f'{sc_html}</div>',
-                unsafe_allow_html=True,
-            )
-            if status != "locked":
-                btn = "Review Level" if status=="done" else "Start Level"
-                if st.button(btn, key=f"hub_{lvl_id}", use_container_width=True):
-                    st.session_state.view = "level"
-                    st.session_state.current_level = lvl_id
-                    st.rerun()
+    with col_main:
+        st.markdown(
+            f'<h1 class="neon-heading" style="font-size:1.6rem;margin-bottom:0.2rem;">🐍 Python Coding Adventure</h1>'
+            f'<p style="color:#888;font-family:Space Mono,monospace;font-size:0.75rem;">'
+            f'Welcome back, <span style="color:#00FF41">@{st.session_state.username}</span> — choose your next mission!</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
 
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-    xp = st.session_state.xp
-    title, icon = get_character_info(xp)
-    max_xp = sum(v["xp_reward"] for v in LEVELS.values())
-    done   = len(st.session_state.completed_levels)
-    stars  = sum(
-        st.session_state.quiz_state.get(l, {}).get("score", 0)
-        for l in st.session_state.completed_levels
-    )
+        # ── Mission cards in 2 columns inside the left pane ──
+        mission_cols = st.columns(2)
+        for i, (lvl_id, lvl) in enumerate(LEVELS.items()):
+            status = level_status(lvl_id)
+            with mission_cols[i % 2]:
+                border  = "#00FF41" if status=="done" else (lvl["color"] if status=="unlocked" else "#2A2A2A")
+                shadow  = f"4px 4px 0 {border}" if status!="locked" else "none"
+                opacity = "1" if status!="locked" else "0.4"
+                lbl_txt = "✅ COMPLETE" if status=="done" else ("▶ PLAY" if status=="unlocked" else "🔒 LOCKED")
+                lbl_col = "#00FF41" if status=="done" else ("#fff" if status=="unlocked" else "#555")
+                sc_html = ""
+                qs = st.session_state.quiz_state.get(lvl_id, {})
+                if qs.get("submitted"):
+                    sc = qs.get("score", 0)
+                    passed_icon = "✅" if sc >= PASS_THRESHOLD else "❌"
+                    sc_html = f'<div style="font-size:0.7rem;color:#888;margin-top:0.3rem;">{passed_icon} Score: {sc}/{QUESTIONS_PER_EXAM}</div>'
+                # Glowing neon border for unlocked/done
+                glow = f"box-shadow:{shadow},0 0 18px rgba(0,255,65,0.12);" if status=="done" else (f"box-shadow:{shadow};" if status!="locked" else "")
+                st.markdown(
+                    f'<div style="background:linear-gradient(160deg,#131313,#0F1A12);border:2px solid {border};'
+                    f'border-radius:10px;padding:1rem;{glow}text-align:center;margin-bottom:0.6rem;opacity:{opacity};">'
+                    f'<div style="font-size:2rem;margin-bottom:0.3rem;">{lvl["pixel_art"]}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.58rem;color:{border};letter-spacing:0.2em;">LEVEL {lvl_id}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.78rem;color:#fff;font-weight:700;margin:0.25rem 0;">{lvl["icon"]} {lvl["title"]}</div>'
+                    f'<div style="font-size:0.68rem;color:#888;margin-bottom:0.5rem;">{lvl["subtitle"]}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.6rem;color:{lbl_col};">{lbl_txt}</div>'
+                    f'{sc_html}</div>',
+                    unsafe_allow_html=True,
+                )
+                if status != "locked":
+                    btn = "Review Level" if status=="done" else "Start Level"
+                    if st.button(btn, key=f"hub_{lvl_id}", use_container_width=True):
+                        st.session_state.view = "level"
+                        st.session_state.current_level = lvl_id
+                        st.rerun()
 
-    for col, val, label, sub, color in zip(
-        st.columns(4),
-        [f"{icon} {title}", str(xp), f"{done}/5", f"{stars}⭐"],
-        ["Rank", "XP Earned", "Levels Done", "Stars"],
-        ["Character class", f"of {max_xp} total", "Keep going!", "quiz correct"],
-        ["#00FF41", "#9D46FF", "#00CFFF", "#FF6B6B"],
-    ):
-        with col:
-            st.markdown(
-                f'<div class="card" style="text-align:center;padding:1rem;">'
-                f'<div style="font-family:Space Mono,monospace;font-size:1.2rem;color:#fff;">{val}</div>'
-                f'<div style="font-family:Space Mono,monospace;font-size:0.72rem;color:{color};">{label}</div>'
-                f'<div style="font-size:0.68rem;color:#888;">{sub}</div></div>',
-                unsafe_allow_html=True,
-            )
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+        xp = st.session_state.xp
+        title, icon = get_character_info(xp)
+        max_xp = sum(v["xp_reward"] for v in LEVELS.values())
+        done   = len(st.session_state.completed_levels)
+        stars  = sum(
+            st.session_state.quiz_state.get(l, {}).get("score", 0)
+            for l in st.session_state.completed_levels
+        )
 
-    render_leaderboard()
+        for stat_col, val, label, sub, color in zip(
+            st.columns(4),
+            [f"{icon} {title}", str(xp), f"{done}/5", f"{stars}⭐"],
+            ["Rank", "XP Earned", "Levels Done", "Stars"],
+            ["Character class", f"of {max_xp} total", "Keep going!", "quiz correct"],
+            ["#00FF41", "#9D46FF", "#00CFFF", "#FF6B6B"],
+        ):
+            with stat_col:
+                st.markdown(
+                    f'<div class="card" style="text-align:center;padding:1rem;">'
+                    f'<div style="font-family:Space Mono,monospace;font-size:1.2rem;color:#fff;">{val}</div>'
+                    f'<div style="font-family:Space Mono,monospace;font-size:0.72rem;color:{color};">{label}</div>'
+                    f'<div style="font-size:0.68rem;color:#888;">{sub}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        render_leaderboard()
+
+    with col_lab:
+        render_practice_lab()
 
 
 # ============================================================
@@ -2176,51 +2350,63 @@ def render_hub():
 # ============================================================
 def render_level(level_id):
     lvl = LEVELS[level_id]
-    if st.button("← Back to Hub"):
-        st.session_state.view = "hub"
-        st.rerun()
-    st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
-        f'<div style="font-size:3rem;background:#111;border:2px solid #2A2A2A;border-radius:8px;'
-        f'padding:0.3rem 0.8rem;box-shadow:3px 3px 0 #000;">{lvl["pixel_art"]}</div>'
-        f'<div>'
-        f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lvl["color"]};'
-        f'letter-spacing:0.25em;">LEVEL {level_id}</div>'
-        f'<div style="font-family:Space Mono,monospace;font-size:1.3rem;color:#fff;font-weight:700;">'
-        f'{lvl["icon"]} {lvl["title"]}</div>'
-        f'<div style="font-size:0.82rem;color:#888;">{lvl["subtitle"]}</div>'
-        f'</div></div>',
-        unsafe_allow_html=True,
-    )
-    if not is_level_unlocked(level_id):
-        st.markdown(f'<div class="locked-box">🔒 Complete Level {level_id-1} first.</div>', unsafe_allow_html=True)
-        return
+    col_main, col_lab = st.columns([3, 2], gap="large")
 
-    quiz_passed = level_id in st.session_state.completed_levels
-    boss        = BOSS_BATTLES.get(level_id)
-    boss_beaten = level_id in st.session_state.get("boss_battles_done", set())
+    with col_main:
+        if st.button("← Back to Hub"):
+            st.session_state.view = "hub"
+            st.rerun()
+        st.markdown("<hr class='divider'/>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
+            f'<div style="font-size:3rem;background:#111;border:2px solid #2A2A2A;border-radius:8px;'
+            f'padding:0.3rem 0.8rem;box-shadow:3px 3px 0 #000;">{lvl["pixel_art"]}</div>'
+            f'<div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:0.62rem;color:{lvl["color"]};'
+            f'letter-spacing:0.25em;">LEVEL {level_id}</div>'
+            f'<div style="font-family:Space Mono,monospace;font-size:1.3rem;color:#fff;font-weight:700;">'
+            f'{lvl["icon"]} {lvl["title"]}</div>'
+            f'<div style="font-size:0.82rem;color:#888;">{lvl["subtitle"]}</div>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+        if not is_level_unlocked(level_id):
+            st.markdown(f'<div class="locked-box">🔒 Complete Level {level_id-1} first.</div>', unsafe_allow_html=True)
+            with col_lab:
+                render_practice_lab()
+            return
 
-    # Boss tab label shows status
-    boss_label = "⚔️ Boss Battle ✅" if boss_beaten else ("⚔️ Boss Battle 🔓" if quiz_passed else "⚔️ Boss Battle 🔒")
+        quiz_passed = level_id in st.session_state.completed_levels
+        boss        = BOSS_BATTLES.get(level_id)
+        boss_beaten = level_id in st.session_state.get("boss_battles_done", set())
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)", boss_label])
-    with tab1:
-        st.markdown(lvl["description"], unsafe_allow_html=False)
-        st.markdown(f'<div class="info-box">💡 Complete the quiz to earn <strong style="color:#00FF41">+{lvl["xp_reward"]} XP</strong> — Pass mark: <strong>6/10 (60%)</strong></div>', unsafe_allow_html=True)
-    with tab2:
-        st.markdown('<p style="color:#888;font-size:0.8rem;font-family:Space Mono,monospace;">// Study this before the quiz</p>', unsafe_allow_html=True)
-        st.code(lvl["code_example"], language="python")
-    with tab3:
-        render_quiz(level_id, lvl)
-    with tab4:
-        if not quiz_passed:
-            st.markdown(
-                '<div class="locked-box">🔒 Pass the quiz first to unlock the Boss Battle and earn bonus XP!</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            render_boss_battle(level_id)
+        boss_label = "⚔️ Boss Battle ✅" if boss_beaten else ("⚔️ Boss Battle 🔓" if quiz_passed else "⚔️ Boss Battle 🔒")
+
+        tab1, tab2, tab3, tab4 = st.tabs(["📖 Learn", "💻 Code Example", "🎯 Quiz (10 Q)", boss_label])
+        with tab1:
+            st.markdown(lvl["description"], unsafe_allow_html=False)
+            st.markdown(f'<div class="info-box">💡 Complete the quiz to earn <strong style="color:#00FF41">+{lvl["xp_reward"]} XP</strong> — Pass mark: <strong>6/10 (60%)</strong></div>', unsafe_allow_html=True)
+        with tab2:
+            st.markdown('<p style="color:#888;font-size:0.8rem;font-family:Space Mono,monospace;">// Study this before the quiz</p>', unsafe_allow_html=True)
+            st.code(lvl["code_example"], language="python")
+        with tab3:
+            render_quiz(level_id, lvl)
+        with tab4:
+            if not quiz_passed:
+                st.markdown(
+                    '<div class="locked-box">🔒 Pass the quiz first to unlock the Boss Battle and earn bonus XP!</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                render_boss_battle(level_id)
+
+    with col_lab:
+        # Pre-seed the lab with the level's code example on first visit to this level
+        lab_key = f"_lab_seeded_{level_id}"
+        if lab_key not in st.session_state:
+            st.session_state.sandbox_code = lvl["code_example"]
+            st.session_state[lab_key] = True
+        render_practice_lab(default_code=lvl["code_example"])
 
 
 # ============================================================
@@ -2436,6 +2622,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
