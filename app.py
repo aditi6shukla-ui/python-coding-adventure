@@ -6,7 +6,9 @@ import json
 import sys
 import io
 from datetime import datetime, date
-from streamlit_firestore import FirestoreConnection   # pip install streamlit-firestore
+
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # ============================================================
 # PAGE CONFIG
@@ -20,17 +22,25 @@ st.set_page_config(
 
 # ============================================================
 # FIRESTORE CONNECTION
+# Uses credentials stored in .streamlit/secrets.toml
 # ============================================================
-# Credentials live in .streamlit/secrets.toml  (see bottom of file)
 @st.cache_resource
-def get_firestore():
-    return st.connection("firestore", type=FirestoreConnection)
+def get_firestore_client():
+    """Initialise Firebase Admin SDK once and return Firestore client."""
+    if not firebase_admin._apps:
+        key_dict = dict(st.secrets["firebase"])
+        # secrets.toml stores private_key with literal \n — restore real newlines
+        key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
+
 
 def _users_col():
-    return get_firestore().collection("users")
+    return get_firestore_client().collection("users")
 
 def _progress_col():
-    return get_firestore().collection("progress")
+    return get_firestore_client().collection("progress")
 
 
 # ── Thin helpers so the rest of the app barely changes ────────
