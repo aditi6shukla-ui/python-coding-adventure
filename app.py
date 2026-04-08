@@ -16,7 +16,7 @@ st.set_page_config(
     page_title="Python Coding Adventure",
     page_icon="🐍",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ============================================================
@@ -1255,7 +1255,7 @@ def init_state():
         "xp": 0, "completed_levels": set(), "quiz_state": {}, "cert_name": "",
         "current_level": 1, "show_badge": None, "view": "hub",
         "streak": 0, "last_login": "", "boss_beaten": set(),
-        "lab_open": False, "sandbox_code": "", "sandbox_output": "", "sandbox_error": "",
+        "lab_open": False, "panel": None, "sandbox_code": "", "sandbox_output": "", "sandbox_error": "",
         "dark_mode": True,
     }
     for k, v in defaults.items():
@@ -1981,201 +1981,246 @@ def load_practice_lab():
                     unsafe_allow_html=True)
 
 
+
 # ============================================================
-# load_sidebar() — UNIFIED SIDEBAR
+# NAVBAR — always-visible top nav (replaces sidebar entirely)
 # ============================================================
-def load_sidebar():
+def render_navbar():
+    """Full-width top navigation bar with stats, nav buttons, theme toggle, and lab toggle."""
+    xp          = st.session_state.xp
+    title, icon = get_character_info(xp)
+    max_xp      = sum(v["xp_reward"] for v in LEVELS.values())
+    streak      = st.session_state.get("streak", 0)
+    completed   = len(st.session_state.completed_levels)
+    boss_count  = len(st.session_state.get("boss_beaten", set()))
+    progress    = min(xp / max_xp, 1.0)
+    filled      = int(progress * 16)
+    bar         = "█" * filled + "░" * (16 - filled)
+    streak_html = f'🔥 {streak}d  ' if streak >= 2 else ""
+    dark        = st.session_state.get("dark_mode", True)
+
+    # Nav row
+    c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 1, 1])
+    with c1:
+        st.markdown(
+            f'<div style="padding:0.4rem 0;">'
+            f'<span style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--muted);">'
+            f'{icon} <strong style="color:var(--text)">{title}</strong>'
+            f' &nbsp;<span style="color:var(--neon)">{bar}</span>'
+            f' <span style="color:var(--muted)">{xp}/{max_xp} XP</span>'
+            f' &nbsp;<span style="color:#FF9000">{streak_html}</span>'
+            f'<span style="color:var(--border)"> | </span>'
+            f'<span style="color:var(--muted)">@{st.session_state.username}</span>'
+            f'</span></div>',
+            unsafe_allow_html=True)
+    with c2:
+        if st.button("🏠 Hub", use_container_width=True, key="nav_hub"):
+            st.session_state.view = "hub"
+            st.session_state.panel = None
+            st.rerun()
+    with c3:
+        if st.button("🏆 Ranks", use_container_width=True, key="nav_ranks"):
+            st.session_state.view = "leaderboard"
+            st.session_state.panel = None
+            st.rerun()
+    with c4:
+        lab_label = "✕ Lab" if st.session_state.get("panel") == "lab" else "🧪 Lab"
+        if st.button(lab_label, use_container_width=True, key="nav_lab"):
+            st.session_state.panel = None if st.session_state.get("panel") == "lab" else "lab"
+            st.rerun()
+    with c5:
+        stats_label = "✕ Stats" if st.session_state.get("panel") == "stats" else "📊 Stats"
+        if st.button(stats_label, use_container_width=True, key="nav_stats"):
+            st.session_state.panel = None if st.session_state.get("panel") == "stats" else "stats"
+            st.rerun()
+    with c6:
+        theme_lbl = "☀️" if dark else "🌑"
+        if st.button(theme_lbl, use_container_width=True, key="nav_theme"):
+            st.session_state.dark_mode = not dark
+            st.rerun()
+
+    st.markdown("<div class='divider' style='margin:0.4rem 0 0.8rem'/>", unsafe_allow_html=True)
+
+    # ── Slide-out panels ──
+    panel = st.session_state.get("panel")
+
+    if panel == "lab":
+        _render_lab_panel()
+    elif panel == "stats":
+        _render_stats_panel()
+
+
+def _render_lab_panel():
+    """Inline Practice Lab panel — drops below the nav bar."""
+    st.markdown(
+        '<div style="background:var(--card);border:2px solid var(--neon);border-radius:10px;'
+        'padding:1.2rem 1.4rem;margin-bottom:1rem;'
+        'box-shadow:0 0 20px rgba(0,255,65,0.15),4px 4px 0 #000;">'
+        '<div style="font-family:JetBrains Mono,monospace;font-size:0.72rem;color:var(--neon);margin-bottom:0.5rem;">'
+        '// 🧪 PRACTICE LAB — write Python, hit Run</div>',
+        unsafe_allow_html=True)
+
+    code = st.text_area(
+        "lab_code",
+        value=st.session_state.get("sandbox_code", ""),
+        height=180,
+        key="sandbox_code_widget",
+        placeholder='print("Hello, Realm!")\nfor i in range(5):\n    print(i)',
+        label_visibility="collapsed",
+    )
+    st.session_state.sandbox_code = code
+
+    col_run, col_clr, col_close = st.columns([3, 1, 1])
+    with col_run:
+        run_clicked = st.button("▶ Run Code", key="sandbox_run", use_container_width=True)
+    with col_clr:
+        if st.button("🗑 Clear", key="sandbox_clear", use_container_width=True):
+            st.session_state.sandbox_output = ""
+            st.session_state.sandbox_error  = ""
+            st.rerun()
+    with col_close:
+        if st.button("✕ Close", key="lab_close_btn", use_container_width=True):
+            st.session_state.panel = None
+            st.rerun()
+
+    if run_clicked and code.strip():
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            exec(compile(code, "<sandbox>", "exec"), {})
+            st.session_state.sandbox_output = buf.getvalue() or "(no output)"
+            st.session_state.sandbox_error  = ""
+        except Exception:
+            tb = traceback.format_exc()
+            st.session_state.sandbox_error  = tb
+            st.session_state.sandbox_output = ""
+            if "NameError"       in tb: st.toast("🧙 Guide: Variable used before it's defined!", icon="💡")
+            elif "SyntaxError"   in tb: st.toast("🧙 Guide: Check colons, brackets, indentation!", icon="💡")
+            elif "IndentationError" in tb: st.toast("🧙 Guide: Use 4 spaces per indent level.", icon="💡")
+            elif "TypeError"     in tb: st.toast("🧙 Guide: Mixing incompatible types, like str + int!", icon="💡")
+            elif "IndexError"    in tb: st.toast("🧙 Guide: List index out of range!", icon="💡")
+            else:                        st.toast("🧙 Guide: Read the error carefully!", icon="⚠️")
+        finally:
+            sys.stdout = old_stdout
+
+    output = st.session_state.get("sandbox_output", "")
+    error  = st.session_state.get("sandbox_error",  "")
+    if output:
+        st.markdown(f'<div class="sandbox-label">// OUTPUT</div><div class="sandbox-output">{output}</div>', unsafe_allow_html=True)
+    if error:
+        st.markdown(f'<div class="sandbox-label" style="color:#FF4444;">// ERROR</div><div class="sandbox-error">{error}</div>', unsafe_allow_html=True)
+    if not output and not error:
+        st.markdown('<div class="sandbox-label" style="color:var(--border);">// output appears here after Run</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _render_stats_panel():
+    """Inline stats + spellbook panel."""
     xp          = st.session_state.xp
     title, icon = get_character_info(xp)
     max_xp      = sum(v["xp_reward"] for v in LEVELS.values())
     completed   = len(st.session_state.completed_levels)
-    streak      = st.session_state.get("streak", 0)
     boss_count  = len(st.session_state.get("boss_beaten", set()))
-    stars       = sum(
-        st.session_state.quiz_state.get(l, {}).get("score", 0)
-        for l in st.session_state.completed_levels
-    )
+    streak      = st.session_state.get("streak", 0)
+    stars       = sum(st.session_state.quiz_state.get(l,{}).get("score",0) for l in st.session_state.completed_levels)
+    avatar      = st.session_state.username[:2].upper() if st.session_state.username else "??"
 
-    with st.sidebar:
-        # ── Brand ──
+    with st.container():
         st.markdown(
-            '<div style="text-align:center;padding:0.4rem 0 0.8rem;">'
-            '<div style="font-family:JetBrains Mono,monospace;font-size:0.48rem;'
-            'color:var(--neon);letter-spacing:0.3em;">🐍 PYTHON ADVENTURE</div>'
-            '</div>',
+            '<div style="background:var(--card);border:2px solid var(--border);border-radius:10px;'
+            'padding:1.2rem 1.4rem;margin-bottom:1rem;box-shadow:3px 3px 0 #000;">',
             unsafe_allow_html=True)
 
-        # ── Theme toggle ──
-        dark = st.session_state.get("dark_mode", True)
-        toggle_label = "☀️ Scholar Mode" if dark else "🌑 Matrix Mode"
-        if st.button(toggle_label, key="theme_toggle", use_container_width=True):
-            st.session_state.dark_mode = not dark
-            st.rerun()
+        left, mid, right = st.columns([1, 2, 1])
 
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── CHARACTER PROFILE ──
-        avatar_letters = (st.session_state.username[:2].upper() if st.session_state.username else "??")
-        streak_fire = "🔥" * min(streak, 5) if streak >= 1 else ""
-        st.markdown(
-            f'<div style="text-align:center;padding:0.8rem 0;">'
-            f'<div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,var(--purple),var(--neon));'
-            f'display:flex;align-items:center;justify-content:center;margin:0 auto 0.6rem;'
-            f'border:3px solid var(--neon);box-shadow:0 0 16px rgba(0,255,65,0.3);">'
-            f'<span style="font-family:Syne,sans-serif;font-size:1.3rem;font-weight:800;color:#fff;">{avatar_letters}</span>'
-            f'</div>'
-            f'<div style="font-family:Syne,sans-serif;font-size:1rem;color:var(--text);font-weight:700;">{icon} {title}</div>'
-            f'<div style="font-size:0.7rem;color:var(--neon);margin-top:0.15rem;font-family:JetBrains Mono,monospace;">@{st.session_state.username}</div>'
-            f'<div style="font-size:0.95rem;margin-top:0.4rem;">{streak_fire}</div>'
-            f'</div>',
-            unsafe_allow_html=True)
-
-        # Streak banner
-        if streak >= 2:
+        with left:
+            streak_fire = "🔥" * min(streak, 5) if streak >= 1 else "—"
             st.markdown(
-                f'<div class="streak-badge">🔥 {streak}-Day Streak! +20% XP Bonus</div>',
-                unsafe_allow_html=True)
-        elif streak == 1:
-            st.markdown(
-                '<div style="text-align:center;font-size:0.67rem;color:#FF9000;font-family:JetBrains Mono,monospace;'
-                'padding:0.3rem 0;">🔥 Login tomorrow to ignite your streak!</div>',
-                unsafe_allow_html=True)
-
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── UNIFIED STATS ──
-        st.markdown(
-            '<div style="font-family:JetBrains Mono,monospace;font-size:0.62rem;'
-            'color:var(--muted);margin-bottom:0.5rem;letter-spacing:0.12em;">CHARACTER STATS</div>',
-            unsafe_allow_html=True)
-
-        st.markdown(
-            f'<div class="stat-row"><span style="color:var(--muted)">XP</span>'
-            f'<span class="xp-badge">{xp} / {max_xp}</span></div>',
-            unsafe_allow_html=True)
-        st.progress(xp_to_progress(xp))
-
-        for label, val, color in [
-            ("Levels Done",   f"{completed} / 5",   "var(--neon)"),
-            ("Bosses Beaten", f"💀 {boss_count} / 5", "#FF4444"),
-            ("Quiz Stars",    f"⭐ {stars} pts",     "#FFD700"),
-            ("Pass Mark",     "6 / 10 (60%)",        "var(--purple2)"),
-        ]:
-            st.markdown(
-                f'<div class="stat-row">'
-                f'<span style="color:var(--muted)">{label}</span>'
-                f'<span style="color:{color};font-family:JetBrains Mono,monospace;">{val}</span>'
+                f'<div style="text-align:center;">'
+                f'<div style="width:56px;height:56px;border-radius:50%;'
+                f'background:linear-gradient(135deg,var(--purple),var(--neon));'
+                f'display:flex;align-items:center;justify-content:center;margin:0 auto 0.4rem;'
+                f'border:3px solid var(--neon);box-shadow:0 0 12px rgba(0,255,65,0.3);">'
+                f'<span style="font-family:Syne,sans-serif;font-size:1.1rem;font-weight:800;color:#fff;">{avatar}</span>'
+                f'</div>'
+                f'<div style="font-family:Syne,sans-serif;font-size:0.85rem;color:var(--text);font-weight:700;">{icon} {title}</div>'
+                f'<div style="font-size:0.65rem;color:var(--neon);font-family:JetBrains Mono,monospace;">@{st.session_state.username}</div>'
+                f'<div style="margin-top:0.3rem;font-size:0.85rem;">{streak_fire}</div>'
                 f'</div>',
                 unsafe_allow_html=True)
 
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── QUEST MAP (vertical path) ──
-        st.markdown(
-            '<div style="font-family:JetBrains Mono,monospace;font-size:0.62rem;'
-            'color:var(--muted);margin-bottom:0.5rem;letter-spacing:0.12em;">QUEST MAP</div>',
-            unsafe_allow_html=True)
-
-        for idx, (lvl_id, lvl) in enumerate(LEVELS.items()):
-            status    = level_status(lvl_id)
-            st_icon   = {"done": "✅", "unlocked": "🔓", "locked": "🔒"}[status]
-            clr       = {"done": "var(--neon)", "unlocked": "var(--text)", "locked": "var(--muted)"}[status]
-            qs        = st.session_state.quiz_state.get(lvl_id, {})
-            score_txt = f" ({qs.get('score',0)}/10)" if qs.get("submitted") else ""
-            boss_icon = " 💀" if lvl_id in st.session_state.get("boss_beaten", set()) else ""
-            bg        = "background:rgba(0,255,65,0.06);" if status == "unlocked" else ""
-            mission_short = lvl["mission"].split(":")[0]  # "Mission N"
-
+        with mid:
             st.markdown(
-                f'<div style="{bg}display:flex;align-items:center;gap:0.6rem;padding:0.4rem 0.6rem;'
-                f'border-radius:6px;font-size:0.7rem;">'
-                f'<span style="font-size:1rem;">{st_icon}</span>'
-                f'<div>'
-                f'<div style="color:{clr};font-family:JetBrains Mono,monospace;font-weight:700;">'
-                f'{mission_short}{score_txt}{boss_icon}</div>'
-                f'<div style="color:var(--muted);font-size:0.62rem;">{lvl["title"]}</div>'
-                f'</div></div>',
+                '<div style="font-family:JetBrains Mono,monospace;font-size:0.62rem;'
+                'color:var(--muted);margin-bottom:0.4rem;letter-spacing:0.1em;">CHARACTER STATS</div>',
                 unsafe_allow_html=True)
+            st.progress(min(xp / max_xp, 1.0))
+            for label, val, color in [
+                ("XP",            f"{xp} / {max_xp}",    "var(--purple2)"),
+                ("Levels Done",   f"{completed} / 5",     "var(--neon)"),
+                ("Bosses Beaten", f"💀 {boss_count} / 5", "#FF4444"),
+                ("Quiz Stars",    f"⭐ {stars} pts",      "#FFD700"),
+                ("Day Streak",    f"🔥 {streak} days",    "#FF9000"),
+            ]:
+                st.markdown(
+                    f'<div class="stat-row">'
+                    f'<span style="color:var(--muted)">{label}</span>'
+                    f'<span style="color:{color};font-family:JetBrains Mono,monospace;font-size:0.75rem;">{val}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True)
 
-            # Connector line between levels
-            if idx < len(LEVELS) - 1:
-                css_cls = "path-connector" if status != "locked" else "path-connector-locked"
-                st.markdown(f'<div class="{css_cls}"></div>', unsafe_allow_html=True)
-
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── MY SPELLBOOK (unlockable cheat sheet) ──
-        unlocked_ids = sorted(st.session_state.completed_levels)
-        # Always show Level 1 spells regardless
-        available = [1] + [i for i in unlocked_ids if i != 1]
-        if available:
-            with st.expander("📖 My Spellbook", expanded=False):
-                for lvl_id in available:
-                    sb = SPELLBOOK.get(lvl_id)
-                    if not sb:
-                        continue
-                    st.markdown(
-                        f'<div style="font-family:JetBrains Mono,monospace;font-size:0.68rem;'
-                        f'color:var(--neon);margin:0.5rem 0 0.2rem;">{sb["title"]}</div>',
-                        unsafe_allow_html=True)
-                    for spell_name, snippet in sb["spells"]:
-                        st.markdown(
-                            f'<div style="font-size:0.62rem;color:var(--muted);margin-bottom:0.1rem;">{spell_name}</div>',
-                            unsafe_allow_html=True)
-                        st.code(snippet, language="python")
-        else:
+        with right:
             st.markdown(
-                '<div style="font-size:0.72rem;color:var(--muted);text-align:center;padding:0.5rem 0;">'
-                '📖 Complete levels to unlock spells!</div>',
+                '<div style="font-family:JetBrains Mono,monospace;font-size:0.62rem;'
+                'color:var(--muted);margin-bottom:0.4rem;letter-spacing:0.1em;">QUEST MAP</div>',
                 unsafe_allow_html=True)
+            for lvl_id, lvl in LEVELS.items():
+                status  = level_status(lvl_id)
+                st_icon = {"done":"✅","unlocked":"🔓","locked":"🔒"}[status]
+                clr     = {"done":"var(--neon)","unlocked":"var(--text)","locked":"var(--muted)"}[status]
+                qs      = st.session_state.quiz_state.get(lvl_id,{})
+                sc_txt  = f" {qs.get('score',0)}/10" if qs.get("submitted") else ""
+                boss_ic = " 💀" if lvl_id in st.session_state.get("boss_beaten",set()) else ""
+                st.markdown(
+                    f'<div style="font-size:0.68rem;padding:0.2rem 0;color:{clr};font-family:JetBrains Mono,monospace;">'
+                    f'{st_icon} M{lvl_id}: {lvl["title"]}{sc_txt}{boss_ic}</div>',
+                    unsafe_allow_html=True)
 
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── NAV BUTTONS ──
-        if st.button("🏠 Adventure Hub", use_container_width=True):
-            st.session_state.view = "hub"; st.rerun()
-        if st.button("🏆 Leaderboard", use_container_width=True):
-            st.session_state.view = "leaderboard"; st.rerun()
-
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        # ── PRACTICE LAB FAB (inside sidebar) ──
-        load_practice_lab()
-
-        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-        if st.button("🚪 Log Out", use_container_width=True):
-            save_user_progress(st.session_state.username)
-            for k in ["logged_in","username","xp","completed_levels","quiz_state",
-                      "cert_name","current_level","show_badge","view",
-                      "streak","last_login","boss_beaten","sandbox_output","sandbox_error",
-                      "sandbox_code","lab_open"]:
-                st.session_state.pop(k, None)
+        # Close button
+        if st.button("✕ Close Stats", key="stats_close_btn", use_container_width=True):
+            st.session_state.panel = None
             st.rerun()
 
+        # Spellbook
+        st.markdown("<div class='divider'/>", unsafe_allow_html=True)
+        st.markdown(
+            '<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;'
+            'color:var(--neon);margin-bottom:0.4rem;">📖 MY SPELLBOOK</div>',
+            unsafe_allow_html=True)
 
-# ============================================================
-# TOPBAR — always-visible XP strip
-# ============================================================
-def render_topbar():
-    xp          = st.session_state.xp
-    title, icon = get_character_info(xp)
-    max_xp      = sum(v["xp_reward"] for v in LEVELS.values())
-    streak      = st.session_state.get("streak", 0)
-    progress    = min(xp / max_xp, 1.0)
-    filled      = int(progress * 18)
-    bar         = "█" * filled + "░" * (18 - filled)
-    streak_html = f'<span style="color:#FF9000;margin-left:1rem;font-size:0.7rem;">🔥 {streak}-Day Streak</span>' if streak >= 2 else ""
-    st.markdown(
-        f'<div class="topbar">'
-        f'<div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--muted);">'
-        f'{icon} <span style="color:var(--text)">{title}</span>'
-        f'&nbsp;&nbsp;<span style="color:var(--neon)">{bar}</span>'
-        f'&nbsp;<span style="color:var(--muted)">{xp}/{max_xp} XP</span>'
-        f'{streak_html}</div>'
-        f'<div style="font-size:0.65rem;color:var(--muted);font-family:JetBrains Mono,monospace;">@{st.session_state.username}</div>'
-        f'</div>',
-        unsafe_allow_html=True)
+        available = [1] + sorted(i for i in st.session_state.completed_levels if i != 1)
+        for lvl_id in available:
+            sb = SPELLBOOK.get(lvl_id)
+            if not sb: continue
+            with st.expander(sb["title"], expanded=False):
+                for spell_name, snippet in sb["spells"]:
+                    st.markdown(f'<div style="font-size:0.62rem;color:var(--muted);">{spell_name}</div>', unsafe_allow_html=True)
+                    st.code(snippet, language="python")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Logout button outside the panel
+    if st.button("🚪 Log Out", key="logout_btn"):
+        save_user_progress(st.session_state.username)
+        for k in ["logged_in","username","xp","completed_levels","quiz_state",
+                  "cert_name","current_level","show_badge","view",
+                  "streak","last_login","boss_beaten","sandbox_output","sandbox_error",
+                  "sandbox_code","lab_open","panel"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+
 
 
 # ============================================================
@@ -2618,14 +2663,16 @@ hr{{border:none;border-top:1px solid #2A2A2A;margin:1.5rem 0;}}
 # ============================================================
 def main():
     init_state()
+    # Ensure panel key exists
+    if "panel" not in st.session_state:
+        st.session_state.panel = None
     apply_styles()
 
     if not st.session_state.logged_in:
         render_auth()
         return
 
-    load_sidebar()
-    render_topbar()
+    render_navbar()
 
     if st.session_state.view == "hub":
         load_main_grid()
