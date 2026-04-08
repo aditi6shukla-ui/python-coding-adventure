@@ -217,6 +217,43 @@ CUSTOM_CSS = """
     font-family:'Space Mono',monospace; font-size:0.68rem; color:#555;
     margin-top:0.3rem; margin-bottom:0.1rem;
   }
+
+  /* ── Always-visible sidebar toggle button ── */
+  [data-testid="collapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #00FF41 !important;
+    border-radius: 0 8px 8px 0 !important;
+    border: 2px solid #000 !important;
+    box-shadow: 3px 3px 0 #000 !important;
+    width: 2rem !important;
+    height: 2.5rem !important;
+    top: 1rem !important;
+    align-items: center !important;
+    justify-content: center !important;
+    z-index: 9999 !important;
+    cursor: pointer !important;
+  }
+  [data-testid="collapsedControl"] svg {
+    fill: #000 !important;
+    color: #000 !important;
+  }
+
+  /* ── Sidebar expander styling ── */
+  [data-testid="stSidebar"] .streamlit-expanderHeader {
+    font-family: 'Space Mono', monospace !important;
+    font-size: 0.78rem !important;
+    color: #00FF41 !important;
+    background: #111 !important;
+    border: 1px solid #2A2A2A !important;
+    border-radius: 6px !important;
+  }
+  [data-testid="stSidebar"] .streamlit-expanderContent {
+    background: #0A0A0A !important;
+    border: 1px solid #1A1A1A !important;
+    border-radius: 0 0 6px 6px !important;
+  }
 </style>
 """
 
@@ -1537,7 +1574,7 @@ def render_auth():
 # PRACTICE LAB (SANDBOX)
 # ============================================================
 def render_practice_lab():
-    with st.expander("🧪 Practice Lab", expanded=False):
+    with st.expander("🧪 Practice Lab", expanded=True):
         st.markdown('<p class="sandbox-label">// Write Python below and hit Run ▶</p>', unsafe_allow_html=True)
         code = st.text_area(
             "code_input", height=150, key="sandbox_code",
@@ -1576,6 +1613,35 @@ def render_practice_lab():
         if not output and not error:
             st.markdown('<div class="sandbox-label" style="color:#333;">// output will appear here</div>',
                         unsafe_allow_html=True)
+
+
+# ============================================================
+# TOP XP BAR  (visible even when sidebar is collapsed)
+# ============================================================
+def render_topbar():
+    xp          = st.session_state.xp
+    title, icon = get_character_info(xp)
+    max_xp      = sum(v["xp_reward"] for v in LEVELS.values())
+    streak      = st.session_state.get("streak", 0)
+    progress    = min(xp / max_xp, 1.0)
+    bar_filled  = int(progress * 20)
+    bar_empty   = 20 - bar_filled
+    bar_str     = "█" * bar_filled + "░" * bar_empty
+    streak_html = f'<span style="color:#FF9000;margin-left:1rem;">🔥 {streak}-Day Streak</span>' if streak >= 2 else ""
+    st.markdown(
+        f'<div style="background:#111;border:1px solid #2A2A2A;border-radius:8px;'
+        f'padding:0.5rem 1rem;margin-bottom:1rem;display:flex;align-items:center;'
+        f'justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">'
+        f'<div style="font-family:Space Mono,monospace;font-size:0.72rem;color:#888;">'
+        f'{icon} <span style="color:#fff">{title}</span>'
+        f'<span style="color:#2A2A2A;margin:0 0.5rem;">|</span>'
+        f'<span style="color:#00FF41;font-family:Space Mono,monospace;">{bar_str}</span>'
+        f'<span style="color:#888;margin-left:0.5rem;">{xp}/{max_xp} XP</span>'
+        f'{streak_html}</div>'
+        f'<div style="font-size:0.68rem;color:#555;font-family:Space Mono,monospace;">'
+        f'@{st.session_state.username}</div>'
+        f'</div>',
+        unsafe_allow_html=True)
 
 
 # ============================================================
@@ -2127,6 +2193,7 @@ def main():
         return
 
     render_sidebar()
+    render_topbar()
 
     if st.session_state.view == "hub":
         render_hub()
