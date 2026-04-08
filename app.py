@@ -2181,6 +2181,34 @@ hr{{border:none;border-top:1px solid #2A2A2A;margin:1.5rem 0;}}
                     unsafe_allow_html=True)
 
 
+FORCE_SIDEBAR_JS = """
+<script>
+(function() {
+    function openSidebar() {
+        var selectors = [
+            '[data-testid="collapsedControl"]',
+            '[data-testid="stSidebarCollapsedControl"]',
+            'button[kind="header"]',
+        ];
+        for (var i = 0; i < selectors.length; i++) {
+            var btn = window.parent.document.querySelector(selectors[i]);
+            if (btn) {
+                var sidebar = window.parent.document.querySelector('[data-testid="stSidebar"]');
+                if (sidebar) {
+                    var rect = sidebar.getBoundingClientRect();
+                    if (rect.left < -50) { btn.click(); }
+                }
+                break;
+            }
+        }
+    }
+    setTimeout(openSidebar, 150);
+    setTimeout(openSidebar, 600);
+    setTimeout(openSidebar, 1500);
+})();
+</script>
+"""
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -2192,6 +2220,8 @@ def main():
         render_auth()
         return
 
+    import streamlit.components.v1 as components
+    components.html(FORCE_SIDEBAR_JS, height=0)
     render_sidebar()
     render_topbar()
 
@@ -2205,4 +2235,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
