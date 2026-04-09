@@ -735,16 +735,50 @@ def apply_styles():
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@600;700;800&family=Outfit:wght@300;400;500;600&display=swap');
 
   /* ════════════════════════════════════════════
-     PERMANENT SIDEBAR — hides collapse button,
-     locks sidebar open at all times
+     PERMANENT SIDEBAR — collapse button fully nuked
   ════════════════════════════════════════════ */
-  [data-testid="collapsedControl"]          {{ display: none !important; }}
-  [data-testid="stSidebarCollapsedControl"] {{ display: none !important; }}
-  button[data-testid="baseButton-header"]   {{ display: none !important; }}
+
+  /* Kill every possible selector for the collapse/expand button */
+  [data-testid="collapsedControl"],
+  [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stSidebarNavCollapseButton"],
+  button[data-testid="baseButton-header"],
+  button[kind="header"],
+  [data-testid="stSidebar"] button,
+  [data-testid="stSidebar"] > div:first-child > div:first-child > button,
+  section[data-testid="stSidebar"] > div > button,
+  .st-emotion-cache-nakff5,
+  .st-emotion-cache-1pbsqtx,
+  [class*="collapsedControl"],
+  [class*="CollapseButton"],
+  [class*="sidebar-collapse"] {{
+    display:        none !important;
+    visibility:     hidden !important;
+    opacity:        0 !important;
+    pointer-events: none !important;
+    width:          0 !important;
+    height:         0 !important;
+    max-height:     0 !important;
+    max-width:      0 !important;
+    overflow:       hidden !important;
+    position:       fixed !important;
+    left:           -9999px !important;
+    top:            -9999px !important;
+    z-index:        -9999 !important;
+  }}
+
+  /* Nuke the top padding/space the button normally occupies */
+  [data-testid="stSidebar"] > div:first-child {{
+    padding-top: 1rem !important;
+    margin-top:  0 !important;
+  }}
+  [data-testid="stSidebar"] .block-container {{
+    padding-top: 0.8rem !important;
+  }}
   [data-testid="stSidebar"] {{
-    min-width: 290px !important;
-    max-width: 290px !important;
-    width:     290px !important;
+    min-width: 260px !important;
+    max-width: 260px !important;
+    width:     260px !important;
     background: {sidebar_bg} !important;
     border-right: 2px solid {border};
     transform: none !important;
@@ -753,7 +787,7 @@ def apply_styles():
   }}
   [data-testid="stSidebar"] > div:first-child {{
     transform: none !important;
-    width: 290px !important;
+    width: 260px !important;
   }}
   [data-testid="stSidebar"] .block-container {{
     padding: 0.8rem 1rem !important;
@@ -1138,6 +1172,26 @@ def apply_styles():
     border: 1px solid {border} !important;
     border-radius: var(--radius) !important;
   }}
+  /* Force code text to be fully visible */
+  .stCodeBlock code, .stCodeBlock span, pre code, pre span {{
+    color: #E8E8E8 !important;
+    opacity: 1 !important;
+  }}
+  .stCodeBlock {{
+    filter: none !important;
+    opacity: 1 !important;
+  }}
+  /* Syntax highlight overrides — keep them readable */
+  .stCodeBlock .highlight .kn,
+  .stCodeBlock .highlight .k  {{ color: #79B8FF !important; }}
+  .stCodeBlock .highlight .s,
+  .stCodeBlock .highlight .s1,
+  .stCodeBlock .highlight .s2 {{ color: #9ECE6A !important; }}
+  .stCodeBlock .highlight .mi,
+  .stCodeBlock .highlight .mf {{ color: #FF9E64 !important; }}
+  .stCodeBlock .highlight .c1 {{ color: #8B949E !important; opacity: 1 !important; }}
+  .stCodeBlock .highlight .nb {{ color: #79B8FF !important; }}
+  .stCodeBlock .highlight .n  {{ color: #E8E8E8 !important; }}
 
   /* ── Expander ── */
   .streamlit-expanderHeader {{
@@ -1196,22 +1250,22 @@ def apply_styles():
 # ============================================================
 # render_lab()  — FLOATING PRACTICE LAB
 # ============================================================
+def render_lab_button():
+    """Only the toggle button — called INSIDE the sidebar context."""
+    lab_open  = st.session_state.get("lab_open", False)
+    btn_label = "✕ Close Lab" if lab_open else "🧪 Practice Lab"
+    if st.button(btn_label, key="lab_fab"):
+        st.session_state.lab_open = not lab_open
+        st.rerun()
+
+
 def render_lab():
-    lab_open = st.session_state.get("lab_open", False)
-
-    with st.sidebar:
-        btn_label = "✕ Close Lab" if lab_open else "🧪 Practice Lab"
-        if st.button(btn_label, key="lab_fab"):
-            st.session_state.lab_open = not lab_open
-            st.rerun()
-
+    """The lab panel itself — called OUTSIDE sidebar, in main content area."""
     if not st.session_state.get("lab_open", False):
         return
 
-    # Render inline below sidebar — in main area
-    dark      = st.session_state.get("dark_mode", True)
-    neon      = "#00FF41"
-    code_bg   = "#060606" if dark else "#1A1A2E"
+    dark = st.session_state.get("dark_mode", True)
+    neon = "#00FF41"
 
     st.markdown('<div class="lab-panel">', unsafe_allow_html=True)
     st.markdown(
@@ -1233,12 +1287,12 @@ def render_lab():
     with col_run:
         run_clicked = st.button("▶ Run", key="lab_run", use_container_width=True)
     with col_clr:
-        if st.button("🗑", key="lab_clear", use_container_width=True):
+        if st.button("🗑 Clear", key="lab_clear", use_container_width=True):
             st.session_state.sandbox_output = ""
             st.session_state.sandbox_error  = ""
             st.rerun()
     with col_x:
-        if st.button("✕", key="lab_close", use_container_width=True):
+        if st.button("✕ Close", key="lab_close", use_container_width=True):
             st.session_state.lab_open = False
             st.rerun()
 
@@ -1253,15 +1307,14 @@ def render_lab():
             tb = traceback.format_exc()
             st.session_state.sandbox_error  = tb
             st.session_state.sandbox_output = ""
-            # Dungeon Guide — smart feedback
-            if "NameError"          in tb: st.toast("🧙 Guide: A variable is used before it's defined!", icon="💡")
-            elif "SyntaxError"      in tb: st.toast("🧙 Guide: Check your colons, brackets & quotes!", icon="💡")
-            elif "IndentationError" in tb: st.toast("🧙 Guide: Python needs exactly 4 spaces per indent.", icon="💡")
-            elif "TypeError"        in tb: st.toast("🧙 Guide: Mixing incompatible types — e.g. str + int!", icon="💡")
-            elif "IndexError"       in tb: st.toast("🧙 Guide: List index out of range!", icon="💡")
-            elif "KeyError"         in tb: st.toast("🧙 Guide: Dict key doesn't exist — use .get()!", icon="💡")
-            elif "ZeroDivisionError"in tb: st.toast("🧙 Guide: Can't divide by zero!", icon="💡")
-            else:                          st.toast("🧙 Guide: Read the error message carefully!", icon="⚠️")
+            if   "NameError"          in tb: st.toast("🧙 Guide: A variable is used before it's defined!", icon="💡")
+            elif "SyntaxError"        in tb: st.toast("🧙 Guide: Check your colons, brackets & quotes!", icon="💡")
+            elif "IndentationError"   in tb: st.toast("🧙 Guide: Python needs exactly 4 spaces per indent.", icon="💡")
+            elif "TypeError"          in tb: st.toast("🧙 Guide: Mixing incompatible types — e.g. str + int!", icon="💡")
+            elif "IndexError"         in tb: st.toast("🧙 Guide: List index out of range!", icon="💡")
+            elif "KeyError"           in tb: st.toast("🧙 Guide: Dict key doesn't exist — use .get()!", icon="💡")
+            elif "ZeroDivisionError"  in tb: st.toast("🧙 Guide: Can't divide by zero!", icon="💡")
+            else:                            st.toast("🧙 Guide: Read the error message carefully!", icon="⚠️")
         finally:
             sys.stdout = sys.__stdout__
 
@@ -1272,7 +1325,7 @@ def render_lab():
     if err:
         st.markdown(f'<div class="sandbox-label" style="color:#FF4444;">// ERROR</div><div class="sandbox-error">{err}</div>', unsafe_allow_html=True)
     if not out and not err:
-        st.markdown('<div class="sandbox-label">// output appears here after Run ▶</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sandbox-label">// output appears here after ▶ Run</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1361,7 +1414,7 @@ def render_sidebar():
         st.markdown("<div class='divider'/>", unsafe_allow_html=True)
 
         # ── PRACTICE LAB TOGGLE (FAB inside sidebar) ──
-        render_lab()   # draws the toggle button here
+        render_lab_button()   # ONLY the toggle button — no widgets
 
         st.markdown("<div class='divider'/>", unsafe_allow_html=True)
 
@@ -1939,6 +1992,7 @@ def main():
         return
 
     render_sidebar()
+    render_lab()          # lab panel renders in main area, not sidebar
 
     if st.session_state.view == "hub":
         render_hub()
@@ -1950,4 +2004,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
